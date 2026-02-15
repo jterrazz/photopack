@@ -11,15 +11,7 @@ pub fn set(vault: &Vault, path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-pub fn show(vault: &Vault) -> Result<()> {
-    match vault.get_vault_path()? {
-        Some(path) => println!("Vault path: {}", path.display()),
-        None => println!("No vault path configured. Use `lsvault vault set <path>` to set one."),
-    }
-    Ok(())
-}
-
-pub fn save(vault: &mut Vault) -> Result<()> {
+pub fn sync(vault: &mut Vault) -> Result<()> {
     let pb = ProgressBar::new(0);
     pb.set_style(
         ProgressStyle::with_template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
@@ -31,7 +23,7 @@ pub fn save(vault: &mut Vault) -> Result<()> {
         VaultSaveProgress::Start { total } => {
             pb.set_length(total as u64);
             pb.set_position(0);
-            pb.set_message("Saving photos to vault...");
+            pb.set_message("Syncing photos to vault...");
         }
         VaultSaveProgress::Copied { target, .. } => {
             pb.inc(1);
@@ -45,6 +37,6 @@ pub fn save(vault: &mut Vault) -> Result<()> {
         }
     }))?;
 
-    println!("Vault save complete.");
+    println!("Vault sync complete.");
     Ok(())
 }

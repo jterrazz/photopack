@@ -20,9 +20,9 @@ cargo run -p losslessvault-cli -- status
 cargo run -p losslessvault-cli -- duplicates
 cargo run -p losslessvault-cli -- duplicates 1
 
-# Export deduplicated library to vault (preserves original formats)
+# Sync deduplicated library to vault (preserves original formats)
 cargo run -p losslessvault-cli -- vault set ~/Vault
-cargo run -p losslessvault-cli -- vault save
+cargo run -p losslessvault-cli -- vault sync
 
 # Export as HEIC (macOS — like iCloud Photo export)
 cargo run -p losslessvault-cli -- export set ~/Export
@@ -41,8 +41,7 @@ cargo run -p losslessvault-cli -- export
 | `lsvault duplicates` | List all duplicate groups |
 | `lsvault duplicates <id>` | Show group detail with source-of-truth marker |
 | `lsvault vault set <path>` | Set the vault directory for permanent lossless archive |
-| `lsvault vault show` | Show the current vault path |
-| `lsvault vault save` | Archive deduplicated best-quality photos to the vault |
+| `lsvault vault sync` | Sync deduplicated best-quality photos to the vault |
 | `lsvault export set <path>` | Set the HEIC export destination directory |
 | `lsvault export show` | Show the current export path |
 | `lsvault export [--quality 85]` | Convert deduplicated photos to HEIC (macOS) |
@@ -101,12 +100,12 @@ Files are sorted by group (source-of-truth first within each group), then ungrou
 
 ### Vault (Lossless Archive)
 
-`lsvault vault save` archives a clean, deduplicated photo library to the configured vault directory. The vault is a permanent lossless archive — even if you remove sources later, the vault keeps your best originals:
+`lsvault vault sync` syncs a clean, deduplicated photo library to the configured vault directory. The vault is a permanent lossless archive — even if you remove sources later, the vault keeps your best originals:
 
 - **Deduplication** — For each duplicate group, only the source-of-truth is exported. Ungrouped photos are exported as-is.
 - **Date-based organization** — Photos are organized into `YYYY/MM/DD/` folders based on EXIF capture date, with modification time as fallback.
 - **Collision handling** — When multiple photos share the same date and filename, a suffix (`_1`, `_2`, ...) is appended.
-- **Incremental** — Re-running `vault save` skips files that already exist in the vault with the same size.
+- **Incremental** — Re-running `vault sync` skips files that already exist in the vault with the same size.
 - **Vault path persistence** — The destination is stored in the SQLite catalog and persists across sessions.
 
 ### HEIC Export (macOS)

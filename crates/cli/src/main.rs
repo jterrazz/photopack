@@ -70,10 +70,8 @@ enum VaultAction {
         /// Path to the vault directory
         path: PathBuf,
     },
-    /// Show the current vault path
-    Show,
-    /// Archive deduplicated best-quality photos to the vault (byte-for-byte copies)
-    Save,
+    /// Sync deduplicated best-quality photos to the vault (byte-for-byte copies)
+    Sync,
 }
 
 #[derive(Subcommand)]
@@ -113,8 +111,7 @@ fn main() -> Result<()> {
         Commands::Duplicates { id } => commands::duplicates::run(&vault, id)?,
         Commands::Vault { action } => match action {
             VaultAction::Set { path } => commands::vault::set(&vault, path)?,
-            VaultAction::Show => commands::vault::show(&vault)?,
-            VaultAction::Save => commands::vault::save(&mut vault)?,
+            VaultAction::Sync => commands::vault::sync(&mut vault)?,
         },
         Commands::Export { action, quality } => match action {
             Some(ExportAction::Set { path }) => commands::export::set(&vault, path)?,
