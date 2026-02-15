@@ -31,6 +31,7 @@ cargo clippy --workspace
 - **Perceptual hash thresholds**: NearCertain ≤2, High ≤2, Probable ≤3 bits (out of 64). Super-safe: true cross-format duplicates have distance 0-2, different photos have distance 3+.
 - **Phase 3 cross-format matching**: Ungrouped photos are compared against ALL photos (including already-grouped ones) via BK-tree. This enables cross-format duplicate detection when one variant is already in a SHA-256 group.
 - **EXIF matching filters burst shots**: Phase 2 uses perceptual hash as a strict filter (NEAR_CERTAIN threshold ≤2). Sequential/burst shots (distance 3+) are rejected. Members without phash (HEIC/RAW) are kept.
+- **Sequential shot filter (Phase 3)**: Photos from the same camera with EXIF dates 1-60 seconds apart (but not identical) are rejected as sequential/burst shots. True duplicates always have identical EXIF dates. This prevents false positives from visually similar but distinct consecutive photos that produce identical hashes at 9x8 resolution.
 - **Merge safeguards**: Phase 4 requires cross-group visual validation before merging overlapping groups. At least one pair of exclusive members must be perceptually close. Prevents cascading false merges through bridge photos.
 - **Vault auto-registers as source**: `set_vault_path` automatically registers the vault directory as a scan source (idempotent).
 - **Vault quality upgrade**: During vault sync, superseded vault files (group members in the vault that are NOT the source-of-truth) are automatically removed. This ensures the vault always contains only the highest-quality version.
@@ -40,7 +41,7 @@ cargo clippy --workspace
 
 ## Testing
 
-- 299 tests total (28 CLI + 147 core + 124 e2e)
+- 367 tests total (28 CLI + 215 core + 124 e2e)
 - E2E tests in `crates/core/tests/vault_e2e.rs` use real JPEG/PNG generation via the `image` crate
 - Cross-format testing: use `create_file_with_jpeg_bytes()` to write JPEG bytes to `.cr2`/`.heic`/`.dng` etc. — scanner assigns format from extension, hashes work on raw bytes
 - Use structurally different patterns (gradient vs checkerboard vs stripes) in tests to ensure distinct perceptual hashes — color-only differences are not enough
