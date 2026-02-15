@@ -1,14 +1,26 @@
 pub mod perceptual;
 
+use std::io::Read;
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-/// Compute the SHA-256 hash of a file's contents.
+/// Compute the SHA-256 hash of a file's contents using streaming I/O.
+/// Reads in 64KB chunks to avoid loading large files entirely into memory.
 pub fn compute_sha256(path: &Path) -> std::io::Result<String> {
-    let data = std::fs::read(path)?;
+    let file = std::fs::File::open(path)?;
+    let mut reader = std::io::BufReader::with_capacity(64 * 1024, file);
     let mut hasher = Sha256::new();
-    hasher.update(&data);
+    let mut buf = [0u8; 64 * 1024];
+
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+
     let result = hasher.finalize();
     Ok(format!("{:x}", result))
 }

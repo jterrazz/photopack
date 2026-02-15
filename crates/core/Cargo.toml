@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 rusqlite = { version = "0.31", features = ["bundled"] }
-sha2 = "0.10"
+sha2 = { version = "0.10", features = ["asm"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "webp"] }
 img_hash = "3"
 kamadak-exif = "0.5"

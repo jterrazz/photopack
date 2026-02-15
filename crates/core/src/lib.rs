@@ -52,7 +52,7 @@ impl Vault {
 
     /// Scan all registered sources, hash files, find duplicates, and rank them.
     /// Calls `progress_cb` with progress updates if provided.
-    pub fn scan(&self, mut progress_cb: Option<&mut dyn FnMut(ScanProgress)>) -> Result<()> {
+    pub fn scan(&mut self, mut progress_cb: Option<&mut dyn FnMut(ScanProgress)>) -> Result<()> {
         let sources = self.catalog.list_sources()?;
         let now = chrono::Utc::now().timestamp();
 
@@ -114,10 +114,10 @@ impl Vault {
                 })
                 .collect();
 
-            // Insert into catalog
-            for photo in &processed {
-                self.catalog.upsert_photo(photo)?;
+            // Batch insert into catalog (single transaction)
+            self.catalog.upsert_photos_batch(&processed)?;
 
+            for photo in &processed {
                 if let Some(ref mut cb) = progress_cb {
                     cb(ScanProgress::FileProcessed {
                         path: photo.path.clone(),
@@ -138,13 +138,12 @@ impl Vault {
         let all_photos = self.catalog.list_all_photos()?;
         let match_groups = matching::find_duplicates(&all_photos);
 
-        // Clear existing groups and re-create
-        self.catalog.clear_groups()?;
-
         // Build a lookup map for ranking
         let photo_map: std::collections::HashMap<i64, &PhotoFile> =
             all_photos.iter().map(|p| (p.id, p)).collect();
 
+        // Prepare groups for batch insert
+        let mut group_tuples: Vec<(i64, matching::MatchGroup)> = Vec::new();
         for group in &match_groups {
             let members: Vec<&PhotoFile> = group
                 .member_ids
@@ -157,9 +156,14 @@ impl Vault {
             }
 
             let sot = ranking::elect_source_of_truth(&members);
-            self.catalog
-                .insert_group(sot.id, group.confidence, &group.member_ids)?;
+            group_tuples.push((sot.id, group.clone()));
         }
+
+        let batch: Vec<(i64, domain::Confidence, Vec<i64>)> = group_tuples
+            .into_iter()
+            .map(|(sot_id, g)| (sot_id, g.confidence, g.member_ids))
+            .collect();
+        self.catalog.replace_groups_batch(&batch)?;
 
         if let Some(ref mut cb) = progress_cb {
             cb(ScanProgress::PhaseComplete {
@@ -180,13 +184,14 @@ impl Vault {
         self.catalog.list_all_photos()
     }
 
-    /// Get catalog summary statistics.
+    /// Get catalog summary statistics (single query for photos/groups/duplicates).
     pub fn status(&self) -> Result<CatalogStats> {
+        let (total_photos, total_groups, total_duplicates) = self.catalog.stats_summary()?;
         Ok(CatalogStats {
             total_sources: self.catalog.list_sources()?.len(),
-            total_photos: self.catalog.count_photos()?,
-            total_groups: self.catalog.count_groups()?,
-            total_duplicates: self.catalog.count_duplicate_photos()?,
+            total_photos,
+            total_groups,
+            total_duplicates,
         })
     }
 
@@ -222,7 +227,7 @@ impl Vault {
     /// Ungrouped photos are copied as-is.
     /// Photos are organized into YYYY/MM/DD folders based on EXIF date (mtime fallback).
     pub fn vault_save(
-        &self,
+        &mut self,
         mut progress_cb: Option<&mut dyn FnMut(vault_save::VaultSaveProgress)>,
     ) -> Result<()> {
         let vault_path = self
@@ -245,31 +250,46 @@ impl Vault {
             });
         }
 
+        // Pre-compute targets sequentially (needs filesystem checks for collisions)
+        let targets: Vec<(&PhotoFile, PathBuf)> = to_save
+            .iter()
+            .map(|photo| {
+                let date = vault_save::date_for_photo(photo);
+                let target =
+                    vault_save::build_target_path(&vault_path, date, &photo.path, photo.size);
+                (*photo, target)
+            })
+            .collect();
+
+        // Parallel file copy, collect results
+        let results: Vec<(bool, PathBuf, PathBuf)> = targets
+            .par_iter()
+            .filter_map(|(photo, target)| {
+                match vault_save::copy_photo_to_vault(&photo.path, target, photo.size) {
+                    Ok(did_copy) => Some((did_copy, photo.path.clone(), target.clone())),
+                    Err(_) => None,
+                }
+            })
+            .collect();
+
+        // Report progress sequentially (callback is not Send)
         let mut copied = 0usize;
         let mut skipped = 0usize;
-
-        for photo in &to_save {
-            let date = vault_save::date_for_photo(photo);
-            let target =
-                vault_save::build_target_path(&vault_path, date, &photo.path, photo.size);
-
-            match vault_save::copy_photo_to_vault(&photo.path, &target, photo.size)? {
-                true => {
-                    copied += 1;
-                    if let Some(ref mut cb) = progress_cb {
-                        cb(vault_save::VaultSaveProgress::Copied {
-                            source: photo.path.clone(),
-                            target,
-                        });
-                    }
+        for (did_copy, source, target) in &results {
+            if *did_copy {
+                copied += 1;
+                if let Some(ref mut cb) = progress_cb {
+                    cb(vault_save::VaultSaveProgress::Copied {
+                        source: source.clone(),
+                        target: target.clone(),
+                    });
                 }
-                false => {
-                    skipped += 1;
-                    if let Some(ref mut cb) = progress_cb {
-                        cb(vault_save::VaultSaveProgress::Skipped {
-                            path: photo.path.clone(),
-                        });
-                    }
+            } else {
+                skipped += 1;
+                if let Some(ref mut cb) = progress_cb {
+                    cb(vault_save::VaultSaveProgress::Skipped {
+                        path: source.clone(),
+                    });
                 }
             }
         }
@@ -329,30 +349,45 @@ impl Vault {
             });
         }
 
+        // Pre-compute targets sequentially (needs filesystem checks)
+        let targets: Vec<(&PhotoFile, PathBuf)> = to_export
+            .iter()
+            .map(|photo| {
+                let date = vault_save::date_for_photo(photo);
+                let target = export::build_export_path(&export_path, date, &photo.path);
+                (*photo, target)
+            })
+            .collect();
+
+        // Parallel HEIC conversion, collect results
+        let results: Vec<(bool, PathBuf, PathBuf)> = targets
+            .par_iter()
+            .filter_map(|(photo, target)| {
+                match export::export_photo_to_heic(&photo.path, target, quality) {
+                    Ok(did_convert) => Some((did_convert, photo.path.clone(), target.clone())),
+                    Err(_) => None,
+                }
+            })
+            .collect();
+
+        // Report progress sequentially (callback is not Send)
         let mut converted = 0usize;
         let mut skipped = 0usize;
-
-        for photo in &to_export {
-            let date = vault_save::date_for_photo(photo);
-            let target = export::build_export_path(&export_path, date, &photo.path);
-
-            match export::export_photo_to_heic(&photo.path, &target, quality)? {
-                true => {
-                    converted += 1;
-                    if let Some(ref mut cb) = progress_cb {
-                        cb(export::ExportProgress::Converted {
-                            source: photo.path.clone(),
-                            target,
-                        });
-                    }
+        for (did_convert, source, target) in &results {
+            if *did_convert {
+                converted += 1;
+                if let Some(ref mut cb) = progress_cb {
+                    cb(export::ExportProgress::Converted {
+                        source: source.clone(),
+                        target: target.clone(),
+                    });
                 }
-                false => {
-                    skipped += 1;
-                    if let Some(ref mut cb) = progress_cb {
-                        cb(export::ExportProgress::Skipped {
-                            path: photo.path.clone(),
-                        });
-                    }
+            } else {
+                skipped += 1;
+                if let Some(ref mut cb) = progress_cb {
+                    cb(export::ExportProgress::Skipped {
+                        path: source.clone(),
+                    });
                 }
             }
         }

@@ -20,6 +20,31 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Manage photo sources: add, scan, or list directories
+    Sources {
+        #[command(subcommand)]
+        action: Option<SourcesAction>,
+    },
+    /// Show catalog status summary
+    Status {
+        /// Show the full files table
+        #[arg(long)]
+        files: bool,
+    },
+    /// List all duplicate groups, or show details of a specific group
+    Duplicates {
+        /// Group ID (omit to list all)
+        id: Option<i64>,
+    },
+    /// Manage the vault export destination
+    Vault {
+        #[command(subcommand)]
+        action: VaultAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SourcesAction {
     /// Register a directory as a photo source
     Add {
         /// Path to the photo directory
@@ -27,26 +52,6 @@ enum Commands {
     },
     /// Scan all sources for photos and find duplicates
     Scan,
-    /// List registered sources
-    Sources,
-    /// Show catalog status summary
-    Status {
-        /// Show the full files table
-        #[arg(long)]
-        files: bool,
-    },
-    /// List all duplicate groups
-    Groups,
-    /// Show details of a specific duplicate group
-    Group {
-        /// Group ID
-        id: i64,
-    },
-    /// Manage the vault export destination
-    Vault {
-        #[command(subcommand)]
-        action: VaultAction,
-    },
 }
 
 #[derive(Subcommand)]
@@ -89,19 +94,20 @@ fn dirs_path() -> PathBuf {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let catalog_path = PathBuf::from(&cli.catalog);
-    let vault = Vault::open(&catalog_path)?;
+    let mut vault = Vault::open(&catalog_path)?;
 
     match cli.command {
-        Commands::Add { path } => commands::add::run(&vault, path)?,
-        Commands::Scan => commands::scan::run(&vault)?,
-        Commands::Sources => commands::sources::run(&vault)?,
+        Commands::Sources { action } => match action {
+            None => commands::sources::list(&vault)?,
+            Some(SourcesAction::Add { path }) => commands::sources::add(&vault, path)?,
+            Some(SourcesAction::Scan) => commands::sources::scan(&mut vault)?,
+        },
         Commands::Status { files } => commands::status::run(&vault, files)?,
-        Commands::Groups => commands::groups::run(&vault)?,
-        Commands::Group { id } => commands::group::run(&vault, id)?,
+        Commands::Duplicates { id } => commands::duplicates::run(&vault, id)?,
         Commands::Vault { action } => match action {
             VaultAction::Set { path } => commands::vault::set(&vault, path)?,
             VaultAction::Show => commands::vault::show(&vault)?,
-            VaultAction::Save => commands::vault::save(&vault)?,
+            VaultAction::Save => commands::vault::save(&mut vault)?,
             VaultAction::ExportSet { path } => commands::vault::export_set(&vault, path)?,
             VaultAction::ExportShow => commands::vault::export_show(&vault)?,
             VaultAction::Export { quality } => commands::vault::export(&vault, quality)?,

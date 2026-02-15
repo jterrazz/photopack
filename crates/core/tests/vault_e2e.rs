@@ -39,12 +39,12 @@ fn test_vault_open_reopen_persists() {
     fs::create_dir_all(&photos_dir).unwrap();
 
     {
-        let vault = Vault::open(&db_path).unwrap();
+        let mut vault = Vault::open(&db_path).unwrap();
         vault.add_source(&photos_dir).unwrap();
     }
 
     // Reopen — source should still be there
-    let vault = Vault::open(&db_path).unwrap();
+    let mut vault = Vault::open(&db_path).unwrap();
     let sources = vault.sources().unwrap();
     assert_eq!(sources.len(), 1);
 }
@@ -57,7 +57,7 @@ fn test_add_source_valid_directory() {
     let photos_dir = tmp.path().join("photos");
     fs::create_dir_all(&photos_dir).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     let source = vault.add_source(&photos_dir).unwrap();
     assert_eq!(source.path, photos_dir.canonicalize().unwrap());
 }
@@ -65,7 +65,7 @@ fn test_add_source_valid_directory() {
 #[test]
 fn test_add_source_nonexistent_path() {
     let tmp = tempfile::tempdir().unwrap();
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let err = vault.add_source(Path::new("/nonexistent/path")).unwrap_err();
     assert!(err.to_string().contains("does not exist"));
@@ -77,7 +77,7 @@ fn test_add_source_file_not_directory() {
     let file_path = tmp.path().join("file.txt");
     fs::write(&file_path, b"not a dir").unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     let err = vault.add_source(&file_path).unwrap_err();
     assert!(err.to_string().contains("not a directory"));
 }
@@ -88,7 +88,7 @@ fn test_add_source_duplicate_rejected() {
     let photos_dir = tmp.path().join("photos");
     fs::create_dir_all(&photos_dir).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     assert!(vault.add_source(&photos_dir).is_err());
 }
@@ -98,7 +98,7 @@ fn test_add_source_duplicate_rejected() {
 #[test]
 fn test_status_empty_catalog() {
     let tmp = tempfile::tempdir().unwrap();
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let stats = vault.status().unwrap();
     assert_eq!(stats.total_sources, 0);
@@ -138,7 +138,7 @@ fn test_scan_unique_photos() {
     });
     img3.save(photos_dir.join("checker.jpg")).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -167,7 +167,7 @@ fn test_scan_exact_duplicates() {
         &photos_dir.join("copy.jpg"),
     );
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -224,7 +224,7 @@ fn test_scan_multiple_duplicate_groups() {
     });
     diagonal.save(photos_dir.join("unique.jpg")).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -245,7 +245,7 @@ fn test_group_detail() {
     create_jpeg(&photos_dir.join("a.jpg"), 50, 50, 50);
     copy_file(&photos_dir.join("a.jpg"), &photos_dir.join("b.jpg"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -263,7 +263,7 @@ fn test_group_detail() {
 #[test]
 fn test_group_not_found() {
     let tmp = tempfile::tempdir().unwrap();
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let err = vault.group(999).unwrap_err();
     assert!(err.to_string().contains("not found"));
@@ -279,7 +279,7 @@ fn test_incremental_scan_skips_unchanged() {
 
     create_jpeg(&photos_dir.join("photo.jpg"), 100, 100, 100);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
 
     // First scan
@@ -301,7 +301,7 @@ fn test_scan_picks_up_new_files() {
 
     create_jpeg(&photos_dir.join("first.jpg"), 100, 100, 100);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     assert_eq!(vault.status().unwrap().total_photos, 1);
@@ -326,7 +326,7 @@ fn test_scan_multiple_sources() {
     // Exact copy in different source
     copy_file(&dir_a.join("photo.jpg"), &dir_b.join("photo.jpg"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&dir_a).unwrap();
     vault.add_source(&dir_b).unwrap();
     vault.scan(None).unwrap();
@@ -348,7 +348,7 @@ fn test_scan_with_progress_callback() {
     create_jpeg(&photos_dir.join("a.jpg"), 10, 20, 30);
     create_jpeg(&photos_dir.join("b.jpg"), 40, 50, 60);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
 
     let mut events = Vec::new();
@@ -383,7 +383,7 @@ fn test_scan_empty_directory() {
     let photos_dir = tmp.path().join("empty");
     fs::create_dir_all(&photos_dir).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -405,7 +405,7 @@ fn test_scan_ignores_non_photo_files() {
     fs::write(photos_dir.join("doc.pdf"), b"fake pdf").unwrap();
     create_jpeg(&photos_dir.join("real.jpg"), 100, 100, 100);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -424,7 +424,7 @@ fn test_rescan_updates_groups() {
     create_jpeg(&photos_dir.join("a.jpg"), 100, 100, 100);
     copy_file(&photos_dir.join("a.jpg"), &photos_dir.join("b.jpg"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     assert_eq!(vault.status().unwrap().total_groups, 1);
@@ -446,7 +446,7 @@ fn test_three_way_exact_duplicate() {
     copy_file(&photos_dir.join("a.jpg"), &photos_dir.join("b.jpg"));
     copy_file(&photos_dir.join("a.jpg"), &photos_dir.join("c.jpg"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -471,7 +471,7 @@ fn test_scan_nested_directories() {
     create_jpeg(&root.join("top.jpg"), 10, 20, 30);
     create_jpeg(&sub.join("nested.jpg"), 40, 50, 60);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&root).unwrap();
     vault.scan(None).unwrap();
 
@@ -505,7 +505,7 @@ fn test_cross_directory_exact_copies_merge() {
     create_jpeg(&dir_a.join("photo.jpg"), 120, 130, 140);
     copy_file(&dir_a.join("photo.jpg"), &dir_b.join("photo.jpg"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&dir_a).unwrap();
     vault.add_source(&dir_b).unwrap();
     vault.scan(None).unwrap();
@@ -528,7 +528,7 @@ fn test_cross_format_same_image_grouped() {
     create_jpeg(&photos.join("sunset.jpg"), 200, 100, 50);
     create_png(&photos.join("sunset.png"), 200, 100, 50);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos).unwrap();
     vault.scan(None).unwrap();
 
@@ -556,7 +556,7 @@ fn test_cross_format_cross_directory_merge_into_one_group() {
     // Plus an exact copy of the JPEG in the exports dir
     copy_file(&dir_a.join("photo.jpg"), &dir_b.join("photo_copy.jpg"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&dir_a).unwrap();
     vault.add_source(&dir_b).unwrap();
     vault.scan(None).unwrap();
@@ -627,7 +627,7 @@ fn test_multiple_images_cross_format_cross_directory() {
     // Image 3: unique, no duplicate
     create_jpeg(&dir_a.join("unique.jpg"), 10, 255, 10);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&dir_a).unwrap();
     vault.add_source(&dir_b).unwrap();
     vault.scan(None).unwrap();
@@ -651,7 +651,7 @@ fn test_source_of_truth_prefers_png_over_jpeg() {
     create_jpeg(&photos.join("shot.jpg"), 150, 150, 150);
     create_png(&photos.join("shot.png"), 150, 150, 150);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos).unwrap();
     vault.scan(None).unwrap();
 
@@ -685,7 +685,7 @@ fn test_scan_does_not_freeze_on_unsupported_format_files() {
     // And a real JPEG so we verify scanning works overall
     create_jpeg(&photos.join("real.jpg"), 100, 100, 100);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos).unwrap();
 
     // This must complete without hanging
@@ -709,7 +709,7 @@ fn test_cross_directory_duplicates_source_of_truth_in_group() {
     create_jpeg(&dir_a.join("img.jpg"), 77, 88, 99);
     copy_file(&dir_a.join("img.jpg"), &dir_b.join("img.jpg"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&dir_a).unwrap();
     vault.add_source(&dir_b).unwrap();
     vault.scan(None).unwrap();
@@ -738,7 +738,7 @@ fn test_cross_directory_duplicates_source_of_truth_in_group() {
 #[test]
 fn test_photos_api_empty_catalog() {
     let tmp = tempfile::tempdir().unwrap();
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let photos = vault.photos().unwrap();
     assert!(photos.is_empty());
@@ -754,7 +754,7 @@ fn test_photos_api_returns_all_scanned() {
     create_jpeg(&photos_dir.join("b.jpg"), 40, 50, 60);
     create_jpeg(&photos_dir.join("c.jpg"), 70, 80, 90);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -773,7 +773,7 @@ fn test_photos_api_correct_source_ids() {
     create_jpeg(&dir_a.join("a.jpg"), 10, 20, 30);
     create_jpeg(&dir_b.join("b.jpg"), 40, 50, 60);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     let source_a = vault.add_source(&dir_a).unwrap();
     let source_b = vault.add_source(&dir_b).unwrap();
     vault.scan(None).unwrap();
@@ -808,7 +808,7 @@ fn test_photos_api_includes_duplicates() {
         &photos_dir.join("copy.jpg"),
     );
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -834,7 +834,7 @@ fn test_photos_have_correct_sizes() {
     });
     large.save(photos_dir.join("large.jpg")).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -878,7 +878,7 @@ fn test_raw_cr2_elected_sot_over_jpeg() {
     create_jpeg(&dir.join("photo.jpg"), 100, 100, 100);
     copy_file(&dir.join("photo.jpg"), &dir.join("photo.cr2"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -905,7 +905,7 @@ fn test_raw_dng_elected_sot_over_jpeg() {
     create_jpeg(&dir.join("photo.jpg"), 100, 100, 100);
     copy_file(&dir.join("photo.jpg"), &dir.join("photo.dng"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -933,7 +933,7 @@ fn test_raw_elected_sot_over_heic() {
     create_file_with_jpeg_bytes(&dir.join("photo.heic"), 100, 100, 100);
     copy_file(&dir.join("photo.heic"), &dir.join("photo.cr2"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -960,7 +960,7 @@ fn test_tiff_elected_sot_over_jpeg() {
     create_jpeg(&dir.join("photo.jpg"), 100, 100, 100);
     copy_file(&dir.join("photo.jpg"), &dir.join("photo.tiff"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -988,7 +988,7 @@ fn test_png_elected_sot_over_heic() {
     // PNG copy with same bytes → same SHA256 → grouped
     copy_file(&dir.join("photo.heic"), &dir.join("photo.png"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -1015,7 +1015,7 @@ fn test_jpeg_elected_sot_over_heic() {
     create_jpeg(&dir.join("photo.jpg"), 100, 100, 100);
     copy_file(&dir.join("photo.jpg"), &dir.join("photo.heic"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -1050,7 +1050,7 @@ fn test_three_sources_quality_ladder_raw_wins() {
     copy_file(&camera.join("sunset.cr2"), &icloud.join("sunset.heic"));
     copy_file(&camera.join("sunset.cr2"), &backup.join("sunset.jpg"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&camera).unwrap();
     vault.add_source(&icloud).unwrap();
     vault.add_source(&backup).unwrap();
@@ -1086,7 +1086,7 @@ fn test_vault_save_exports_raw_not_lossy() {
     create_file_with_jpeg_bytes(&camera.join("photo.cr2"), 100, 100, 100);
     copy_file(&camera.join("photo.cr2"), &icloud.join("photo.heic"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&camera).unwrap();
     vault.add_source(&icloud).unwrap();
     vault.scan(None).unwrap();
@@ -1123,7 +1123,7 @@ fn test_vault_as_source_preserves_raw_original() {
     // Lossy copy in iCloud
     copy_file(&vault_dir.join("sunset.cr2"), &icloud.join("sunset.heic"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&vault_dir).unwrap();
     vault.add_source(&icloud).unwrap();
     vault.scan(None).unwrap();
@@ -1194,7 +1194,7 @@ fn test_vault_save_multiple_groups_each_picks_best() {
     copy_file(&src.join("g3_tmp.jpg"), &src.join("g3.webp"));
     fs::remove_file(src.join("g3_tmp.jpg")).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&src).unwrap();
     vault.scan(None).unwrap();
     vault.set_vault_path(&vault_dir).unwrap();
@@ -1232,7 +1232,7 @@ fn test_vault_save_preserves_raw_file_content() {
     let original_bytes = fs::read(src.join("photo.cr2")).unwrap();
     copy_file(&src.join("photo.cr2"), &src.join("photo.heic"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&src).unwrap();
     vault.scan(None).unwrap();
     vault.set_vault_path(&vault_dir).unwrap();
@@ -1264,7 +1264,7 @@ fn test_vault_save_incremental_with_cross_format_group() {
     create_file_with_jpeg_bytes(&src.join("photo.cr2"), 100, 100, 100);
     copy_file(&src.join("photo.cr2"), &src.join("photo.heic"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&src).unwrap();
     vault.scan(None).unwrap();
     vault.set_vault_path(&vault_dir).unwrap();
@@ -1318,7 +1318,7 @@ fn test_all_raw_formats_beat_jpeg() {
             &dir.join(format!("photo.{ext}")),
         );
 
-        let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+        let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
         vault.add_source(&dir).unwrap();
         vault.scan(None).unwrap();
 
@@ -1353,7 +1353,7 @@ fn test_vault_set_and_get_path() {
     let vault_dir = tmp.path().join("my_vault");
     fs::create_dir_all(&vault_dir).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     assert!(vault.get_vault_path().unwrap().is_none());
 
     vault.set_vault_path(&vault_dir).unwrap();
@@ -1381,7 +1381,7 @@ fn test_vault_save_unique_photos() {
     });
     checker.save(photos_dir.join("b.jpg")).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_vault_path(&vault_dir).unwrap();
@@ -1409,7 +1409,7 @@ fn test_vault_save_deduplicates_groups() {
     );
     create_jpeg(&photos_dir.join("unique.jpg"), 10, 20, 30);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_vault_path(&vault_dir).unwrap();
@@ -1433,7 +1433,7 @@ fn test_vault_save_creates_yyyy_mm_dd_structure() {
 
     create_jpeg(&photos_dir.join("photo.jpg"), 100, 100, 100);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_vault_path(&vault_dir).unwrap();
@@ -1463,7 +1463,7 @@ fn test_vault_save_creates_yyyy_mm_dd_structure() {
 #[test]
 fn test_vault_save_without_vault_path_errors() {
     let tmp = tempfile::tempdir().unwrap();
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let err = vault.vault_save(None).unwrap_err();
     assert!(err.to_string().contains("vault path not configured"));
@@ -1479,7 +1479,7 @@ fn test_vault_save_incremental_skips_existing() {
 
     create_jpeg(&photos_dir.join("photo.jpg"), 100, 100, 100);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_vault_path(&vault_dir).unwrap();
@@ -1520,7 +1520,7 @@ fn test_vault_save_incremental_skips_existing() {
 #[test]
 fn test_vault_set_nonexistent_path_errors() {
     let tmp = tempfile::tempdir().unwrap();
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let err = vault
         .set_vault_path(&tmp.path().join("does_not_exist"))
@@ -1534,7 +1534,7 @@ fn test_vault_set_file_not_directory_errors() {
     let file_path = tmp.path().join("file.txt");
     fs::write(&file_path, b"not a dir").unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     let err = vault.set_vault_path(&file_path).unwrap_err();
     assert!(err.to_string().contains("does not exist"));
 }
@@ -1547,7 +1547,7 @@ fn test_vault_set_overwrite_path() {
     fs::create_dir_all(&dir_a).unwrap();
     fs::create_dir_all(&dir_b).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.set_vault_path(&dir_a).unwrap();
     vault.set_vault_path(&dir_b).unwrap();
 
@@ -1563,12 +1563,12 @@ fn test_vault_path_persists_across_reopen() {
     fs::create_dir_all(&vault_dir).unwrap();
 
     {
-        let vault = Vault::open(&db_path).unwrap();
+        let mut vault = Vault::open(&db_path).unwrap();
         vault.set_vault_path(&vault_dir).unwrap();
     }
 
     // Reopen — vault path should persist
-    let vault = Vault::open(&db_path).unwrap();
+    let mut vault = Vault::open(&db_path).unwrap();
     let stored = vault.get_vault_path().unwrap().unwrap();
     assert_eq!(stored, vault_dir.canonicalize().unwrap());
 }
@@ -1579,7 +1579,7 @@ fn test_vault_save_empty_catalog() {
     let vault_dir = tmp.path().join("vault");
     fs::create_dir_all(&vault_dir).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.set_vault_path(&vault_dir).unwrap();
 
     let mut total = usize::MAX;
@@ -1618,7 +1618,7 @@ fn test_vault_save_cross_format_picks_best_quality() {
     create_jpeg(&photos_dir.join("photo.jpg"), 150, 150, 150);
     create_png(&photos_dir.join("photo.png"), 150, 150, 150);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_vault_path(&vault_dir).unwrap();
@@ -1660,7 +1660,7 @@ fn test_vault_save_cross_directory_deduplication() {
     });
     checker.save(dir_a.join("unique.jpg")).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&dir_a).unwrap();
     vault.add_source(&dir_b).unwrap();
     vault.scan(None).unwrap();
@@ -1702,7 +1702,7 @@ fn test_vault_save_multiple_photos_same_date_no_collision() {
     });
     stripes.save(photos_dir.join("c.jpg")).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_vault_path(&vault_dir).unwrap();
@@ -1734,7 +1734,7 @@ fn test_vault_save_progress_events_order() {
     });
     checker.save(photos_dir.join("b.jpg")).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_vault_path(&vault_dir).unwrap();
@@ -1779,7 +1779,7 @@ fn test_vault_save_preserves_file_content() {
     create_jpeg(&photos_dir.join("photo.jpg"), 100, 100, 100);
     let original_bytes = fs::read(photos_dir.join("photo.jpg")).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_vault_path(&vault_dir).unwrap();
@@ -1815,7 +1815,7 @@ fn test_scan_nested_photos_across_multiple_levels() {
     create_jpeg(&month.join("month.jpg"), 70, 80, 90);
     create_jpeg(&day.join("day.jpg"), 100, 110, 120);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&root).unwrap();
     vault.scan(None).unwrap();
 
@@ -1836,7 +1836,7 @@ fn test_nested_duplicates_detected_across_subdirs() {
     create_jpeg(&sub_a.join("photo.jpg"), 10, 20, 30);
     copy_file(&sub_a.join("photo.jpg"), &sub_b.join("photo.jpg"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&root).unwrap();
     vault.scan(None).unwrap();
 
@@ -1858,7 +1858,7 @@ fn test_nested_duplicates_across_different_sources() {
     create_jpeg(&nested_a.join("sunset.jpg"), 10, 20, 30);
     copy_file(&nested_a.join("sunset.jpg"), &nested_b.join("sunset_copy.jpg"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&source_a).unwrap();
     vault.add_source(&source_b).unwrap();
     vault.scan(None).unwrap();
@@ -1879,7 +1879,7 @@ fn test_vault_save_with_nested_source_photos() {
     create_jpeg(&source.join("top.jpg"), 10, 20, 30);
     create_jpeg(&sub.join("nested.jpg"), 200, 50, 150);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&source).unwrap();
     vault.scan(None).unwrap();
     vault.set_vault_path(&vault_dir).unwrap();
@@ -1903,7 +1903,7 @@ fn test_vault_save_deduplicates_nested_copies() {
     create_jpeg(&originals.join("photo.jpg"), 10, 20, 30);
     copy_file(&originals.join("photo.jpg"), &copies.join("photo.jpg"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&source).unwrap();
     vault.scan(None).unwrap();
     vault.set_vault_path(&vault_dir).unwrap();
@@ -1926,7 +1926,7 @@ fn test_deeply_nested_photos_retain_correct_source_id() {
     create_jpeg(&deep1.join("photo1.jpg"), 10, 20, 30);
     create_jpeg(&deep2.join("photo2.jpg"), 40, 50, 60);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     let s1 = vault.add_source(&source1).unwrap();
     let s2 = vault.add_source(&source2).unwrap();
     vault.scan(None).unwrap();
@@ -1949,7 +1949,7 @@ fn test_incremental_scan_with_nested_new_files() {
 
     create_jpeg(&source.join("existing.jpg"), 10, 20, 30);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&source).unwrap();
     vault.scan(None).unwrap();
     assert_eq!(vault.status().unwrap().total_photos, 1);
@@ -1968,7 +1968,7 @@ fn test_vault_save_deleted_vault_path_errors() {
     let vault_dir = tmp.path().join("vault");
     fs::create_dir_all(&vault_dir).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.set_vault_path(&vault_dir).unwrap();
 
     // Delete the vault directory after setting it
@@ -1986,7 +1986,7 @@ fn test_export_set_and_get_path() {
     let export_dir = tmp.path().join("export");
     fs::create_dir_all(&export_dir).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     // Initially unset
     assert!(vault.get_export_path().unwrap().is_none());
@@ -2005,7 +2005,7 @@ fn test_export_set_overwrite_path() {
     fs::create_dir_all(&dir1).unwrap();
     fs::create_dir_all(&dir2).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.set_export_path(&dir1).unwrap();
     vault.set_export_path(&dir2).unwrap();
 
@@ -2016,7 +2016,7 @@ fn test_export_set_overwrite_path() {
 #[test]
 fn test_export_set_nonexistent_path_errors() {
     let tmp = tempfile::tempdir().unwrap();
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let err = vault
         .set_export_path(Path::new("/nonexistent/export/path"))
@@ -2027,7 +2027,7 @@ fn test_export_set_nonexistent_path_errors() {
 #[test]
 fn test_export_path_not_set_errors() {
     let tmp = tempfile::tempdir().unwrap();
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let err = vault.export(85, None).unwrap_err();
     // On macOS this hits SipsNotAvailable or ExportPathNotSet depending on order
@@ -2042,7 +2042,7 @@ fn test_export_path_not_set_errors() {
 #[test]
 fn test_export_path_not_set_errors_macos() {
     let tmp = tempfile::tempdir().unwrap();
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
 
     let err = vault.export(85, None).unwrap_err();
     assert!(err.to_string().contains("export path not configured"));
@@ -2059,7 +2059,7 @@ fn test_export_converts_jpeg_to_heic() {
 
     create_jpeg(&photos_dir.join("photo.jpg"), 100, 150, 200);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_export_path(&export_dir).unwrap();
@@ -2100,7 +2100,7 @@ fn test_export_deduplicates_groups() {
     );
     create_jpeg(&photos_dir.join("unique.jpg"), 10, 200, 30);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_export_path(&export_dir).unwrap();
@@ -2121,7 +2121,7 @@ fn test_export_skips_existing() {
 
     create_jpeg(&photos_dir.join("photo.jpg"), 100, 100, 100);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_export_path(&export_dir).unwrap();
@@ -2167,7 +2167,7 @@ fn test_export_date_organization() {
 
     create_jpeg(&photos_dir.join("photo.jpg"), 100, 100, 100);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_export_path(&export_dir).unwrap();
@@ -2203,7 +2203,7 @@ fn test_export_progress_events_order() {
     create_jpeg(&photos_dir.join("a.jpg"), 100, 100, 100);
     create_jpeg(&photos_dir.join("b.jpg"), 200, 50, 175);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_export_path(&export_dir).unwrap();
@@ -2237,7 +2237,7 @@ fn test_export_deleted_export_path_errors() {
     let export_dir = tmp.path().join("export");
     fs::create_dir_all(&export_dir).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.set_export_path(&export_dir).unwrap();
 
     // Delete the export directory after setting it
@@ -2258,7 +2258,7 @@ fn test_export_converts_png_to_heic() {
 
     create_png(&photos_dir.join("screenshot.png"), 100, 150, 200);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_export_path(&export_dir).unwrap();
@@ -2291,7 +2291,7 @@ fn test_export_multiple_photos_all_heic_extension() {
     create_jpeg(&photos_dir.join("b.jpg"), 200, 50, 175);
     create_png(&photos_dir.join("c.png"), 80, 160, 240);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_export_path(&export_dir).unwrap();
@@ -2328,7 +2328,7 @@ fn test_export_multiple_sources() {
     create_jpeg(&source_a.join("from_a.jpg"), 10, 20, 30);
     create_jpeg(&source_b.join("from_b.jpg"), 200, 50, 175);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&source_a).unwrap();
     vault.add_source(&source_b).unwrap();
     vault.scan(None).unwrap();
@@ -2351,7 +2351,7 @@ fn test_export_nested_source_photos() {
     create_jpeg(&source.join("top.jpg"), 10, 20, 30);
     create_jpeg(&nested.join("deep.jpg"), 200, 50, 175);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&source).unwrap();
     vault.scan(None).unwrap();
     vault.set_export_path(&export_dir).unwrap();
@@ -2367,7 +2367,7 @@ fn test_export_empty_catalog_succeeds() {
     let export_dir = tmp.path().join("export");
     fs::create_dir_all(&export_dir).unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.set_export_path(&export_dir).unwrap();
 
     use losslessvault_core::export::ExportProgress;
@@ -2410,7 +2410,7 @@ fn test_export_all_grouped_only_sots_exported() {
         &photos_dir.join("g2_b.jpg"),
     );
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -2435,7 +2435,7 @@ fn test_export_after_rescan_includes_new_photos() {
 
     create_jpeg(&photos_dir.join("first.jpg"), 10, 20, 30);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_export_path(&export_dir).unwrap();
@@ -2485,7 +2485,7 @@ fn test_export_independent_from_vault_save() {
 
     create_jpeg(&photos_dir.join("photo.jpg"), 10, 20, 30);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
 
@@ -2526,7 +2526,7 @@ fn test_export_heic_file_is_nonempty() {
 
     create_jpeg(&photos_dir.join("photo.jpg"), 100, 150, 200);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_export_path(&export_dir).unwrap();
@@ -2557,7 +2557,7 @@ fn test_export_cross_source_dedup() {
     create_jpeg(&source_a.join("photo.jpg"), 10, 20, 30);
     copy_file(&source_a.join("photo.jpg"), &source_b.join("photo.jpg"));
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&source_a).unwrap();
     vault.add_source(&source_b).unwrap();
     vault.scan(None).unwrap();
@@ -2582,7 +2582,7 @@ fn test_export_converted_event_has_correct_paths() {
 
     create_jpeg(&photos_dir.join("photo.jpg"), 100, 100, 100);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
     vault.set_export_path(&export_dir).unwrap();
@@ -2624,7 +2624,7 @@ fn test_export_set_file_not_directory_errors() {
     let file_path = tmp.path().join("not_a_dir.txt");
     fs::write(&file_path, b"i am a file").unwrap();
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     let err = vault.set_export_path(&file_path).unwrap_err();
     assert!(err.to_string().contains("does not exist"));
 }
@@ -2637,12 +2637,12 @@ fn test_export_path_persists_across_reopen() {
     let db_path = tmp.path().join("catalog.db");
 
     {
-        let vault = Vault::open(&db_path).unwrap();
+        let mut vault = Vault::open(&db_path).unwrap();
         vault.set_export_path(&export_dir).unwrap();
     }
 
     // Reopen vault and verify path persisted
-    let vault = Vault::open(&db_path).unwrap();
+    let mut vault = Vault::open(&db_path).unwrap();
     let retrieved = vault.get_export_path().unwrap().unwrap();
     assert_eq!(retrieved, export_dir.canonicalize().unwrap());
 }
@@ -2669,7 +2669,7 @@ fn test_export_multiple_groups_correct_count() {
     create_jpeg(&photos_dir.join("unique1.jpg"), 80, 160, 240);
     create_jpeg(&photos_dir.join("unique2.jpg"), 30, 90, 180);
 
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
 

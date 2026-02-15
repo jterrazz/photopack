@@ -32,6 +32,8 @@ pub fn initialize(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_photos_sha256 ON photos(sha256);
         CREATE INDEX IF NOT EXISTS idx_photos_source ON photos(source_id);
+        CREATE INDEX IF NOT EXISTS idx_photos_path ON photos(path);
+        CREATE INDEX IF NOT EXISTS idx_photos_source_mtime ON photos(source_id, mtime);
 
         CREATE TABLE IF NOT EXISTS duplicate_groups (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,

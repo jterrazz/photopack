@@ -6,6 +6,76 @@ use crate::domain::{Confidence, PhotoFile};
 use crate::hasher::perceptual::hamming_distance;
 use confidence::confidence_from_hamming;
 
+/// BK-tree for efficient Hamming distance nearest-neighbor search.
+/// Allows finding all items within a given distance in O(n^α) where α < 1,
+/// much faster than brute-force O(n) for each query.
+struct BkTree {
+    root: Option<BkNode>,
+}
+
+struct BkNode {
+    hash: u64,
+    photo_id: i64,
+    children: HashMap<u32, BkNode>,
+}
+
+impl BkTree {
+    fn new() -> Self {
+        Self { root: None }
+    }
+
+    fn insert(&mut self, hash: u64, photo_id: i64) {
+        match self.root {
+            None => {
+                self.root = Some(BkNode {
+                    hash,
+                    photo_id,
+                    children: HashMap::new(),
+                });
+            }
+            Some(ref mut root) => {
+                Self::insert_into(root, hash, photo_id);
+            }
+        }
+    }
+
+    fn insert_into(node: &mut BkNode, hash: u64, photo_id: i64) {
+        let dist = hamming_distance(node.hash, hash);
+        if let Some(child) = node.children.get_mut(&dist) {
+            Self::insert_into(child, hash, photo_id);
+        } else {
+            node.children.insert(dist, BkNode {
+                hash,
+                photo_id,
+                children: HashMap::new(),
+            });
+        }
+    }
+
+    /// Find all entries within `max_distance` of `query_hash`.
+    fn find_within(&self, query_hash: u64, max_distance: u32) -> Vec<(i64, u32)> {
+        let mut results = Vec::new();
+        if let Some(ref root) = self.root {
+            Self::search(root, query_hash, max_distance, &mut results);
+        }
+        results
+    }
+
+    fn search(node: &BkNode, query_hash: u64, max_distance: u32, results: &mut Vec<(i64, u32)>) {
+        let dist = hamming_distance(node.hash, query_hash);
+        if dist <= max_distance {
+            results.push((node.photo_id, dist));
+        }
+        let low = dist.saturating_sub(max_distance);
+        let high = dist + max_distance;
+        for d in low..=high {
+            if let Some(child) = node.children.get(&d) {
+                Self::search(child, query_hash, max_distance, results);
+            }
+        }
+    }
+}
+
 /// A raw match group before final merge.
 #[derive(Debug, Clone)]
 pub struct MatchGroup {
@@ -139,17 +209,22 @@ fn validate_with_phash(ids: &[i64], photos: &[PhotoFile]) -> Vec<i64> {
 /// Phase 3: Group ungrouped photos by perceptual hash similarity.
 /// Ungrouped photos are compared against ALL photos (including already-grouped
 /// ones) so that cross-format duplicates create bridge groups that Phase 4 merges.
+/// Uses a BK-tree for O(n log n) Hamming distance lookups instead of O(n²).
 fn group_by_perceptual_hash(photos: &[PhotoFile], excluded: &HashSet<i64>) -> Vec<MatchGroup> {
+    use confidence::PHASH_PROBABLE_THRESHOLD;
+
+    // Build BK-tree from ALL photos with a perceptual hash
+    let mut tree = BkTree::new();
+    for photo in photos {
+        if let Some(phash) = photo.phash {
+            tree.insert(phash, photo.id);
+        }
+    }
+
     // Ungrouped photos that have a perceptual hash — these seed new groups.
     let ungrouped: Vec<&PhotoFile> = photos
         .iter()
         .filter(|p| !excluded.contains(&p.id) && p.phash.is_some())
-        .collect();
-
-    // All photos with a perceptual hash — targets for comparison.
-    let all_with_phash: Vec<&PhotoFile> = photos
-        .iter()
-        .filter(|p| p.phash.is_some())
         .collect();
 
     let mut groups: Vec<MatchGroup> = Vec::new();
@@ -160,21 +235,21 @@ fn group_by_perceptual_hash(photos: &[PhotoFile], excluded: &HashSet<i64>) -> Ve
             continue;
         }
 
+        let phash_a = photo_a.phash.unwrap();
+        let neighbors = tree.find_within(phash_a, PHASH_PROBABLE_THRESHOLD);
+
         let mut members = vec![photo_a.id];
         let mut worst_confidence = Confidence::Certain;
 
-        for &photo_b in &all_with_phash {
-            if photo_b.id == photo_a.id || used.contains(&photo_b.id) {
+        for (neighbor_id, dist) in &neighbors {
+            if *neighbor_id == photo_a.id || used.contains(neighbor_id) {
                 continue;
             }
 
-            if let (Some(pa), Some(pb)) = (photo_a.phash, photo_b.phash) {
-                let dist = hamming_distance(pa, pb);
-                if let Some(conf) = confidence_from_hamming(dist) {
-                    members.push(photo_b.id);
-                    if conf < worst_confidence {
-                        worst_confidence = conf;
-                    }
+            if let Some(conf) = confidence_from_hamming(*dist) {
+                members.push(*neighbor_id);
+                if conf < worst_confidence {
+                    worst_confidence = conf;
                 }
             }
         }

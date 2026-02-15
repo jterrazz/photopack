@@ -1,5 +1,6 @@
 pub mod schema;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection};
@@ -157,6 +158,79 @@ impl Catalog {
         }
     }
 
+    /// Upsert multiple photos in a single transaction for bulk performance.
+    pub fn upsert_photos_batch(&mut self, photos: &[PhotoFile]) -> Result<Vec<i64>> {
+        let tx = self.conn.transaction()?;
+        let mut ids = Vec::with_capacity(photos.len());
+
+        for photo in photos {
+            let path_str = photo.path.to_string_lossy();
+            let format_str = photo.format.as_str();
+
+            let existing_id: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM photos WHERE path = ?1",
+                    params![path_str.as_ref()],
+                    |row| row.get(0),
+                )
+                .ok();
+
+            if let Some(id) = existing_id {
+                tx.execute(
+                    "UPDATE photos SET source_id=?1, size=?2, format=?3, sha256=?4, phash=?5, dhash=?6, mtime=?7,
+                     exif_date=?8, exif_camera_make=?9, exif_camera_model=?10, exif_gps_lat=?11, exif_gps_lon=?12,
+                     exif_width=?13, exif_height=?14
+                     WHERE id=?15",
+                    params![
+                        photo.source_id,
+                        photo.size as i64,
+                        format_str,
+                        photo.sha256,
+                        photo.phash.map(|v| v as i64),
+                        photo.dhash.map(|v| v as i64),
+                        photo.mtime,
+                        photo.exif.as_ref().and_then(|e| e.date.clone()),
+                        photo.exif.as_ref().and_then(|e| e.camera_make.clone()),
+                        photo.exif.as_ref().and_then(|e| e.camera_model.clone()),
+                        photo.exif.as_ref().and_then(|e| e.gps_lat),
+                        photo.exif.as_ref().and_then(|e| e.gps_lon),
+                        photo.exif.as_ref().and_then(|e| e.width),
+                        photo.exif.as_ref().and_then(|e| e.height),
+                        id,
+                    ],
+                )?;
+                ids.push(id);
+            } else {
+                tx.execute(
+                    "INSERT INTO photos (source_id, path, size, format, sha256, phash, dhash, mtime,
+                     exif_date, exif_camera_make, exif_camera_model, exif_gps_lat, exif_gps_lon, exif_width, exif_height)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+                    params![
+                        photo.source_id,
+                        path_str.as_ref(),
+                        photo.size as i64,
+                        format_str,
+                        photo.sha256,
+                        photo.phash.map(|v| v as i64),
+                        photo.dhash.map(|v| v as i64),
+                        photo.mtime,
+                        photo.exif.as_ref().and_then(|e| e.date.clone()),
+                        photo.exif.as_ref().and_then(|e| e.camera_make.clone()),
+                        photo.exif.as_ref().and_then(|e| e.camera_model.clone()),
+                        photo.exif.as_ref().and_then(|e| e.gps_lat),
+                        photo.exif.as_ref().and_then(|e| e.gps_lon),
+                        photo.exif.as_ref().and_then(|e| e.width),
+                        photo.exif.as_ref().and_then(|e| e.height),
+                    ],
+                )?;
+                ids.push(tx.last_insert_rowid());
+            }
+        }
+
+        tx.commit()?;
+        Ok(ids)
+    }
+
     pub fn get_photo_mtime(&self, path: &Path) -> Result<Option<i64>> {
         let path_str = path.to_string_lossy();
         let mtime = self
@@ -229,6 +303,27 @@ impl Catalog {
         Ok(count as usize)
     }
 
+    /// Get all catalog statistics in a single query for the status dashboard.
+    pub fn stats_summary(&self) -> Result<(usize, usize, usize)> {
+        let (photos, groups, duplicates) = self.conn.query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM photos),
+                (SELECT COUNT(*) FROM duplicate_groups),
+                (SELECT COUNT(DISTINCT gm.photo_id) FROM group_members gm
+                 JOIN duplicate_groups dg ON gm.group_id = dg.id
+                 WHERE gm.photo_id != dg.source_of_truth_id)",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)? as usize,
+                    row.get::<_, i64>(1)? as usize,
+                    row.get::<_, i64>(2)? as usize,
+                ))
+            },
+        )?;
+        Ok((photos, groups, duplicates))
+    }
+
     // ── Duplicate Groups ─────────────────────────────────────────────
 
     pub fn clear_groups(&self) -> Result<()> {
@@ -253,30 +348,123 @@ impl Catalog {
         Ok(group_id)
     }
 
+    /// Clear existing groups and insert new ones in a single transaction.
+    pub fn replace_groups_batch(&mut self, groups: &[(i64, Confidence, Vec<i64>)]) -> Result<Vec<i64>> {
+        let tx = self.conn.transaction()?;
+
+        tx.execute("DELETE FROM group_members", [])?;
+        tx.execute("DELETE FROM duplicate_groups", [])?;
+
+        let mut group_ids = Vec::with_capacity(groups.len());
+
+        for (source_of_truth_id, confidence, member_ids) in groups {
+            tx.execute(
+                "INSERT INTO duplicate_groups (source_of_truth_id, confidence) VALUES (?1, ?2)",
+                params![source_of_truth_id, confidence.as_str()],
+            )?;
+            let group_id = tx.last_insert_rowid();
+
+            for &photo_id in member_ids {
+                tx.execute(
+                    "INSERT INTO group_members (group_id, photo_id) VALUES (?1, ?2)",
+                    params![group_id, photo_id],
+                )?;
+            }
+            group_ids.push(group_id);
+        }
+
+        tx.commit()?;
+        Ok(group_ids)
+    }
+
     pub fn list_groups(&self) -> Result<Vec<DuplicateGroup>> {
+        // Single JOIN query to avoid N+1 problem
         let mut stmt = self.conn.prepare(
-            "SELECT id, source_of_truth_id, confidence FROM duplicate_groups",
+            "SELECT dg.id, dg.source_of_truth_id, dg.confidence,
+                    p.id, p.source_id, p.path, p.size, p.format, p.sha256, p.phash, p.dhash, p.mtime,
+                    p.exif_date, p.exif_camera_make, p.exif_camera_model, p.exif_gps_lat, p.exif_gps_lon,
+                    p.exif_width, p.exif_height
+             FROM duplicate_groups dg
+             JOIN group_members gm ON gm.group_id = dg.id
+             JOIN photos p ON p.id = gm.photo_id
+             ORDER BY dg.id",
         )?;
-        let groups = stmt
+
+        let rows = stmt
             .query_map([], |row| {
+                let exif_date: Option<String> = row.get(12)?;
+                let exif_make: Option<String> = row.get(13)?;
+                let exif_model: Option<String> = row.get(14)?;
+                let exif_lat: Option<f64> = row.get(15)?;
+                let exif_lon: Option<f64> = row.get(16)?;
+                let exif_w: Option<u32> = row.get(17)?;
+                let exif_h: Option<u32> = row.get(18)?;
+
+                let exif = if exif_date.is_some()
+                    || exif_make.is_some()
+                    || exif_model.is_some()
+                    || exif_lat.is_some()
+                {
+                    Some(ExifData {
+                        date: exif_date,
+                        camera_make: exif_make,
+                        camera_model: exif_model,
+                        gps_lat: exif_lat,
+                        gps_lon: exif_lon,
+                        width: exif_w,
+                        height: exif_h,
+                    })
+                } else {
+                    None
+                };
+
                 Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(0)?,       // group id
+                    row.get::<_, i64>(1)?,       // sot_id
+                    row.get::<_, String>(2)?,    // confidence
+                    PhotoFile {
+                        id: row.get(3)?,
+                        source_id: row.get(4)?,
+                        path: PathBuf::from(row.get::<_, String>(5)?),
+                        size: row.get::<_, i64>(6)? as u64,
+                        format: parse_format(&row.get::<_, String>(7)?),
+                        sha256: row.get(8)?,
+                        phash: row.get::<_, Option<i64>>(9)?.map(|v| v as u64),
+                        dhash: row.get::<_, Option<i64>>(10)?.map(|v| v as u64),
+                        exif,
+                        mtime: row.get(11)?,
+                    },
                 ))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        let mut result = Vec::new();
-        for (id, sot_id, conf_str) in groups {
-            let members = self.get_group_members(id)?;
-            result.push(DuplicateGroup {
-                id,
-                members,
-                source_of_truth_id: sot_id,
-                confidence: parse_confidence(&conf_str),
-            });
+        // Group rows by group_id
+        let mut group_map: HashMap<i64, (i64, String, Vec<PhotoFile>)> = HashMap::new();
+        let mut group_order: Vec<i64> = Vec::new();
+
+        for (group_id, sot_id, conf_str, photo) in rows {
+            let entry = group_map
+                .entry(group_id)
+                .or_insert_with(|| {
+                    group_order.push(group_id);
+                    (sot_id, conf_str.clone(), Vec::new())
+                });
+            entry.2.push(photo);
         }
+
+        let result = group_order
+            .into_iter()
+            .map(|gid| {
+                let (sot_id, conf_str, members) = group_map.remove(&gid).unwrap();
+                DuplicateGroup {
+                    id: gid,
+                    members,
+                    source_of_truth_id: sot_id,
+                    confidence: parse_confidence(&conf_str),
+                }
+            })
+            .collect();
+
         Ok(result)
     }
 

@@ -19,7 +19,7 @@ pub fn show(vault: &Vault) -> Result<()> {
     Ok(())
 }
 
-pub fn save(vault: &Vault) -> Result<()> {
+pub fn save(vault: &mut Vault) -> Result<()> {
     let pb = ProgressBar::new(0);
     pb.set_style(
         ProgressStyle::with_template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")

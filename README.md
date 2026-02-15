@@ -9,16 +9,16 @@ A Rust-powered photo deduplication engine. Scan local folders, identify duplicat
 cargo build --workspace
 
 # Add photo directories
-cargo run -p losslessvault-cli -- add ~/Photos
-cargo run -p losslessvault-cli -- add ~/Backups/Photos
+cargo run -p losslessvault-cli -- sources add ~/Photos
+cargo run -p losslessvault-cli -- sources add ~/Backups/Photos
 
 # Scan for duplicates
-cargo run -p losslessvault-cli -- scan
+cargo run -p losslessvault-cli -- sources scan
 
 # View results
 cargo run -p losslessvault-cli -- status
-cargo run -p losslessvault-cli -- groups
-cargo run -p losslessvault-cli -- group 1
+cargo run -p losslessvault-cli -- duplicates
+cargo run -p losslessvault-cli -- duplicates 1
 
 # Export deduplicated library to vault (preserves original formats)
 cargo run -p losslessvault-cli -- vault set ~/Vault
@@ -33,13 +33,13 @@ cargo run -p losslessvault-cli -- vault export
 
 | Command | Description |
 |---------|-------------|
-| `lsvault add <path>` | Register a directory as a photo source |
-| `lsvault scan` | Scan all sources, hash files, and find duplicates |
 | `lsvault sources` | List registered source directories |
+| `lsvault sources add <path>` | Register a directory as a photo source |
+| `lsvault sources scan` | Scan all sources, hash files, and find duplicates |
 | `lsvault status` | Show rich status dashboard (overview, sources, vault) |
 | `lsvault status --files` | Include full files table with roles and vault eligibility |
-| `lsvault groups` | List all duplicate groups |
-| `lsvault group <id>` | Show group detail with source-of-truth marker |
+| `lsvault duplicates` | List all duplicate groups |
+| `lsvault duplicates <id>` | Show group detail with source-of-truth marker |
 | `lsvault vault set <path>` | Set the vault export destination directory |
 | `lsvault vault show` | Show the current vault path |
 | `lsvault vault save` | Copy deduplicated best-quality photos to the vault |
@@ -162,12 +162,9 @@ lossless-vault/
 │       └── src/
 │           ├── main.rs         # clap CLI definition
 │           └── commands/       # Subcommand handlers
-│               ├── add.rs
-│               ├── scan.rs     # Progress bar via indicatif
-│               ├── sources.rs
+│               ├── sources.rs  # Add, scan, list sources (progress bar via indicatif)
 │               ├── status.rs   # Rich dashboard with tables (comfy-table)
-│               ├── groups.rs
-│               ├── group.rs
+│               ├── duplicates.rs # List/detail duplicate groups
 │               └── vault.rs    # Vault set/show/save + export commands
 └── tests/
     └── fixtures/               # Test photo fixtures
@@ -182,7 +179,8 @@ lossless-vault/
 | `img_hash` 3 | Perceptual hashing (pHash, dHash) |
 | `image` 0.25 | Image decoding fallback for perceptual hashing |
 | `kamadak-exif` | EXIF metadata extraction |
-| `rayon` | Parallel file hashing |
+| `sha2-asm` | Hardware-accelerated SHA-256 (ARM Crypto Extensions) |
+| `rayon` | Parallel file hashing, copying, and HEIC conversion |
 | `walkdir` | Recursive directory traversal |
 | `clap` (derive) | CLI argument parsing |
 | `indicatif` | Progress bars during scan |
