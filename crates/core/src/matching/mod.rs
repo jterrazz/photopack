@@ -223,11 +223,12 @@ fn group_by_exif(photos: &[PhotoFile], excluded: &HashSet<i64>) -> Vec<MatchGrou
         .collect()
 }
 
-/// Validate a group of photo IDs using perceptual hash distance (dual-hash consensus).
+/// Validate a group of photo IDs using perceptual hash distance (strict dual-hash consensus).
 /// Returns IDs of photos that are perceptually close to at least one other member.
-/// Uses both phash and dhash when available; falls back to phash-only at stricter threshold.
+/// Uses NEAR_CERTAIN threshold (≤2 bits) for EXIF validation — only true duplicates pass.
+/// Sequential/burst shots (distance 3+) are rejected.
 fn validate_with_perceptual_hash(ids: &[i64], photos: &[PhotoFile]) -> HashSet<i64> {
-    use confidence::PHASH_HIGH_THRESHOLD;
+    use confidence::PHASH_NEAR_CERTAIN_THRESHOLD;
 
     let photo_map: HashMap<i64, &PhotoFile> = photos.iter().map(|p| (p.id, p)).collect();
     let mut valid = HashSet::new();
@@ -240,10 +241,10 @@ fn validate_with_perceptual_hash(ids: &[i64], photos: &[PhotoFile]) -> HashSet<i
                     let is_match = match (pa.dhash, pb.dhash) {
                         (Some(da), Some(db)) => {
                             let dhash_dist = hamming_distance(da, db);
-                            confidence_from_hamming(phash_dist).is_some()
-                                && confidence_from_hamming(dhash_dist).is_some()
+                            phash_dist <= PHASH_NEAR_CERTAIN_THRESHOLD
+                                && dhash_dist <= PHASH_NEAR_CERTAIN_THRESHOLD
                         }
-                        _ => phash_dist <= PHASH_HIGH_THRESHOLD,
+                        _ => phash_dist <= PHASH_NEAR_CERTAIN_THRESHOLD,
                     };
                     if is_match {
                         valid.insert(id_a);
@@ -646,6 +647,83 @@ mod tests {
 
         let groups = find_duplicates(&photos);
         assert_eq!(groups.len(), 1, "Dual-hash: both close should group");
+    }
+
+    #[test]
+    fn test_exif_rejects_sequential_shots() {
+        // Regression test: sequential birthday photos with same EXIF.
+        // aHash similar (distance 3) but dHash divergent (distance 6) — realistic for
+        // sequential shots where the scene is similar but composition differs.
+        // Phase 2 EXIF validation uses NEAR_CERTAIN (≤2) → rejects.
+        // Phase 3 dual-hash consensus: dhash distance 6 > PROBABLE (3) → rejects.
+        let photos = vec![
+            {
+                let mut p = make_photo_with_exif(1, "aaa", Some(0b1111_0000), "2024-01-15 12:00:00", "iPhone 16");
+                p.dhash = Some(0b0000_0000);
+                p
+            },
+            {
+                let mut p = make_photo_with_exif(2, "bbb", Some(0b1111_0111), "2024-01-15 12:00:00", "iPhone 16");
+                p.dhash = Some(0b0011_1111); // 6 bits different in dhash
+                p
+            },
+        ];
+
+        let groups = find_duplicates(&photos);
+        assert!(
+            groups.is_empty(),
+            "Sequential shots with divergent dHash must NOT be grouped (birthday photo bug)"
+        );
+    }
+
+    #[test]
+    fn test_exif_rejects_when_phash_distance_3() {
+        // Same EXIF, phash distance 3, dhash distance 3.
+        // Phase 2 EXIF validation requires NEAR_CERTAIN (≤2) → distance 3 rejected.
+        // Phase 3 dual-hash: both distance 3 = PROBABLE → grouped by Phase 3.
+        // This is acceptable because Phase 3 requires BOTH hashes to agree at distance 3,
+        // which is very rare for truly different photos in practice.
+        let photos = vec![
+            make_photo_with_exif(1, "aaa", Some(0b1111_0000), "2024-01-15 12:00:00", "iPhone 16"),
+            make_photo_with_exif(2, "bbb", Some(0b1111_0111), "2024-01-15 12:00:00", "iPhone 16"),
+        ];
+
+        let groups = find_duplicates(&photos);
+        // Phase 3 catches these because both phash AND dhash are distance 3
+        // (dhash defaults to same as phash in make_photo). In reality, different photos
+        // have divergent dHash values (gradient patterns differ), so dual-hash consensus blocks them.
+        assert_eq!(groups.len(), 1, "Phase 3 dual-hash at distance 3 groups when both agree");
+    }
+
+    #[test]
+    fn test_phase3_rejects_distance_4() {
+        // Two photos with no EXIF, phash distance 4 → NOT grouped by Phase 3 (PROBABLE=3)
+        let photos = vec![
+            make_photo(1, "aaa", Some(0b1111_0000)),
+            make_photo(2, "bbb", Some(0b1111_1111)), // 4 bits different
+        ];
+
+        let groups = find_duplicates(&photos);
+        assert!(
+            groups.is_empty(),
+            "Phase 3 should reject photos with phash distance 4"
+        );
+    }
+
+    #[test]
+    fn test_phase3_dual_hash_rejects_mixed_distances() {
+        // phash distance 2 (within threshold) but dhash distance 4 (beyond threshold)
+        // Dual-hash consensus should reject.
+        let photos = vec![
+            make_photo_full(1, "aaa", Some(0b1111_0000), Some(0b0000_0000)),
+            make_photo_full(2, "bbb", Some(0b1111_0011), Some(0b0000_1111)), // phash=2, dhash=4
+        ];
+
+        let groups = find_duplicates(&photos);
+        assert!(
+            groups.is_empty(),
+            "Dual-hash should reject when dhash exceeds threshold even if phash passes"
+        );
     }
 
     #[test]

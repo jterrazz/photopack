@@ -13,8 +13,14 @@ pub enum VaultSaveProgress {
     Copied { source: PathBuf, target: PathBuf },
     /// A file was skipped (already exists with same size).
     Skipped { path: PathBuf },
+    /// A superseded file was removed from the vault (replaced by higher-quality version).
+    Removed { path: PathBuf },
     /// Save completed.
-    Complete { copied: usize, skipped: usize },
+    Complete {
+        copied: usize,
+        skipped: usize,
+        removed: usize,
+    },
 }
 
 /// Parse an EXIF date string into (year, month, day).
@@ -130,6 +136,55 @@ pub fn select_photos_to_export<'a>(
             }
         })
         .collect()
+}
+
+/// Remove superseded vault files: group members that live inside the vault directory
+/// and are NOT the source-of-truth. These are lower-quality versions that have been
+/// replaced by a higher-quality source-of-truth.
+/// Returns the list of removed file paths.
+pub fn cleanup_superseded_vault_files(
+    vault_path: &Path,
+    all_photos: &[PhotoFile],
+    groups: &[DuplicateGroup],
+) -> Vec<PathBuf> {
+    let vault_canonical = vault_path
+        .canonicalize()
+        .unwrap_or_else(|_| vault_path.to_path_buf());
+
+    let photo_map: std::collections::HashMap<i64, &PhotoFile> =
+        all_photos.iter().map(|p| (p.id, p)).collect();
+
+    let mut removed = Vec::new();
+    for group in groups {
+        for member in &group.members {
+            if member.id == group.source_of_truth_id {
+                continue;
+            }
+            let member_canonical = member
+                .path
+                .canonicalize()
+                .unwrap_or_else(|_| member.path.clone());
+            if member_canonical.starts_with(&vault_canonical) {
+                // Verify the SOT is NOT also in the vault (avoid removing if both are in vault)
+                if let Some(sot) = photo_map.get(&group.source_of_truth_id) {
+                    let sot_canonical = sot
+                        .path
+                        .canonicalize()
+                        .unwrap_or_else(|_| sot.path.clone());
+                    // Only remove if SOT exists outside the vault, or SOT is a different
+                    // (higher-quality) file also being synced to the vault
+                    if sot_canonical == member_canonical {
+                        continue; // SOT and member are the same file
+                    }
+                }
+                if fs::remove_file(&member.path).is_ok() {
+                    removed.push(member.path.clone());
+                }
+            }
+        }
+    }
+
+    removed
 }
 
 /// Copy a single file to the target path, creating parent directories as needed.

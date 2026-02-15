@@ -67,8 +67,8 @@ The catalog defaults to `~/.losslessvault/catalog.db`. Override with `--catalog 
 |-------|---------|
 | Certain | Byte-identical SHA-256 |
 | Near-Certain | Strong EXIF match or very close perceptual hash (distance <= 2) |
-| High | EXIF match validated by perceptual hash (distance <= 3) |
-| Probable | Perceptual hash match (distance <= 5) |
+| High | EXIF match validated by perceptual hash (distance <= 2) |
+| Probable | Perceptual hash match (distance <= 3) |
 | Low | Weak signal (reserved for future heuristics) |
 
 ### Perceptual Hashing
@@ -89,6 +89,16 @@ Each duplicate group elects a best copy using:
 
 Rescanning skips files whose modification time (mtime) hasn't changed since the last scan. New or modified files are hashed and inserted; duplicate groups are rebuilt from scratch each scan.
 
+### Two-Phase Hashing (Performance)
+
+Scanning uses a two-phase approach to minimize expensive image decoding:
+
+1. **Phase 1 (fast)** — SHA-256 + EXIF extraction for all new files in parallel (I/O-bound, ~10-50ms/file)
+2. **SHA-256 dedup** — Groups results by hash. For exact duplicates, only one representative needs perceptual hashing. Existing catalog hashes are reused.
+3. **Phase 2 (expensive)** — Perceptual hashing only for unique content in parallel (CPU-bound, ~500ms-2s/file)
+
+If 4 copies of the same photo exist, only 1 image is decoded instead of 4. Re-scanning with a new exact duplicate reuses the catalog's perceptual hash (zero decodes).
+
 ### Catalog Dashboard
 
 `lsvault catalog` displays a rich overview:
@@ -104,6 +114,7 @@ Files are sorted by group (source-of-truth first within each group), then ungrou
 `lsvault vault sync` syncs a clean, deduplicated photo library to the configured vault directory. The vault is a permanent lossless archive — even if you remove sources later, the vault keeps your best originals:
 
 - **Deduplication** — For each duplicate group, only the source-of-truth is synced. Ungrouped photos are synced as-is.
+- **Quality upgrade** — When a higher-quality version is found in sources (e.g., RAW replaces JPEG as SOT), vault sync copies the better version and removes the superseded lower-quality file.
 - **Date-based organization** — Photos are organized into `YYYY/MM/DD/` folders based on EXIF capture date, with modification time as fallback.
 - **Collision handling** — When multiple photos share the same date and filename, a suffix (`_1`, `_2`, ...) is appended.
 - **Incremental** — Re-running `vault sync` skips files that already exist in the vault with the same size.
@@ -157,7 +168,7 @@ lossless-vault/
 │   │   │   ├── vault_save.rs   # Vault sync logic (date org, dedup, parallel copy)
 │   │   │   └── export.rs       # HEIC export via macOS sips
 │   │   └── tests/
-│   │       └── vault_e2e.rs    # 101 end-to-end integration tests
+│   │       └── vault_e2e.rs    # 112 end-to-end integration tests
 │   └── cli/                    # Binary crate (lsvault)
 │       └── src/
 │           ├── main.rs         # clap CLI definition
@@ -192,7 +203,7 @@ lossless-vault/
 ## Development
 
 ```bash
-# Run all tests (163 unit + 101 e2e)
+# Run all tests (167 unit + 112 e2e)
 cargo test --workspace
 
 # Lint
@@ -204,9 +215,9 @@ cargo clippy --workspace
 The test suite covers:
 
 - **Catalog** (21 tests) — CRUD operations, format/confidence roundtrip, mtime tracking, config persistence, source removal
-- **Matching** (29 tests) — All 4 phases, dual-hash consensus, EXIF filtering, merge safeguards, cross-format grouping, transitive merge, full pipeline
+- **Matching** (33 tests) — All 4 phases, dual-hash consensus, EXIF filtering (strict NEAR_CERTAIN threshold), merge safeguards, cross-format grouping, transitive merge, sequential shot rejection, full pipeline
 - **Catalog dashboard** (28 tests) — format_size, source_display_name, StatusData, is_duplicate, vault_eligible, compute_aggregates, compute_source_stats, sort_photos_for_display
-- **Vault sync** (23 tests) — Date parsing, EXIF/mtime fallback, photo selection, collision handling, incremental copy
+- **Vault sync** (23 tests) — Date parsing, EXIF/mtime fallback, photo selection, collision handling, incremental copy, quality upgrade cleanup
 - **Export** (21 tests) — build_export_path (all format extensions, collision, skip, no-extension), export_photo_to_heic (skip/convert), convert_to_heic (parent dirs, invalid source, output validation, quality effect), sips availability
 - **Domain** (5 tests) — Quality tiers, format support, confidence ordering
 - **Perceptual hash** (8 tests) — Hamming distance, real JPEG/PNG hashing
@@ -214,4 +225,4 @@ The test suite covers:
 - **SHA-256** (4 tests) — Consistency, empty files, error handling
 - **Scanner** (11 tests) — Directory walk, format filtering, nested directories (deep nesting, multiple levels, siblings, symlinks)
 - **Ranking** (3 tests) — Format preference, size tiebreak, mtime tiebreak
-- **E2E** (101 tests) — Full vault lifecycle, cross-directory and cross-format duplicates, incremental scan, source-of-truth election, source removal (with group cleanup), vault auto-registration as source, photos API, quality preservation (all format tier combinations, RAW > HEIC > JPEG, vault as source), nested directories (multi-level, cross-source, incremental), vault sync (deduplication, date structure, incremental skip, progress events, error cases, file integrity), HEIC export (JPEG/PNG conversion, multi-source, nested dirs, dedup, cross-source dedup, incremental skip+rescan, independent from vault sync, progress events, config persistence, error handling, file validity)
+- **E2E** (112 tests) — Full vault lifecycle, cross-directory and cross-format duplicates, incremental scan, source-of-truth election, source removal (with group cleanup), vault auto-registration as source, photos API, quality preservation (all format tier combinations, RAW > HEIC > JPEG, vault as source), nested directories (multi-level, cross-source, incremental), vault sync (deduplication, date structure, incremental skip, quality upgrade with superseded file cleanup, progress events, error cases, file integrity), HEIC export (JPEG/PNG conversion, multi-source, nested dirs, dedup, cross-source dedup, incremental skip+rescan, independent from vault sync, progress events, config persistence, error handling, file validity)

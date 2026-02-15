@@ -33,8 +33,19 @@ pub fn sync(vault: &mut Vault) -> Result<()> {
         VaultSaveProgress::Skipped { .. } => {
             pb.inc(1);
         }
-        VaultSaveProgress::Complete { copied, skipped } => {
-            pb.finish_with_message(format!("{copied} copied, {skipped} skipped"));
+        VaultSaveProgress::Removed { path } => {
+            pb.set_message(format!("removed superseded: {}", path.display()));
+        }
+        VaultSaveProgress::Complete {
+            copied,
+            skipped,
+            removed,
+        } => {
+            let mut msg = format!("{copied} copied, {skipped} skipped");
+            if removed > 0 {
+                msg.push_str(&format!(", {removed} superseded removed"));
+            }
+            pb.finish_with_message(msg);
         }
     }))?;
 

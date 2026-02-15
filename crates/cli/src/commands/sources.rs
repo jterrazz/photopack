@@ -51,6 +51,7 @@ pub fn scan(vault: &mut Vault) -> Result<()> {
             .unwrap()
             .progress_chars("=>-"),
     );
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
     vault.scan(Some(&mut |progress| match progress {
         ScanProgress::SourceStart {
@@ -59,9 +60,27 @@ pub fn scan(vault: &mut Vault) -> Result<()> {
         } => {
             pb.set_length(file_count as u64);
             pb.set_position(0);
-            pb.set_message(format!("Scanning {source}"));
+            pb.set_message(format!("Hashing {source}"));
         }
-        ScanProgress::FileProcessed { .. } => {
+        ScanProgress::FileHashed { path } => {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            pb.set_message(name);
+            pb.inc(1);
+        }
+        ScanProgress::AnalysisStart { count } => {
+            pb.set_length(count as u64);
+            pb.set_position(0);
+            pb.set_message("Analyzing images...".to_string());
+        }
+        ScanProgress::AnalysisDone { path } => {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            pb.set_message(name);
             pb.inc(1);
         }
         ScanProgress::PhaseComplete { phase } => {

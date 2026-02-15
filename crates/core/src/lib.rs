@@ -9,6 +9,7 @@ pub mod ranking;
 pub mod scanner;
 pub mod vault_save;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
@@ -21,8 +22,12 @@ use error::{Error, Result};
 pub enum ScanProgress {
     /// Starting scan of a source directory.
     SourceStart { source: String, file_count: usize },
-    /// A file has been processed.
-    FileProcessed { path: PathBuf },
+    /// A file has been hashed (SHA-256 + EXIF).
+    FileHashed { path: PathBuf },
+    /// Starting perceptual analysis of unique images.
+    AnalysisStart { count: usize },
+    /// A perceptual hash has been computed for one image.
+    AnalysisDone { path: PathBuf },
     /// Scan phase completed.
     PhaseComplete { phase: String },
 }
@@ -57,6 +62,11 @@ impl Vault {
 
     /// Scan all registered sources, hash files, find duplicates, and rank them.
     /// Calls `progress_cb` with progress updates if provided.
+    ///
+    /// Uses two-phase hashing for performance: SHA-256 + EXIF first (fast, I/O-bound),
+    /// then perceptual hashing only for unique content (expensive, CPU-bound).
+    /// Exact SHA-256 duplicates skip perceptual hashing entirely.
+    /// Progress events stream in real-time via a background thread + channel.
     pub fn scan(&mut self, mut progress_cb: Option<&mut dyn FnMut(ScanProgress)>) -> Result<()> {
         let sources = self.catalog.list_sources()?;
         let now = chrono::Utc::now().timestamp();
@@ -72,61 +82,146 @@ impl Vault {
                 });
             }
 
-            // Filter out files whose mtime hasn't changed (incremental scan)
-            let files_to_process: Vec<&ScannedFile> = scanned_files
+            // Batch mtime check: one query instead of N
+            // Report skipped files immediately so the progress bar moves
+            let known_mtimes = self.catalog.get_mtimes_for_source(source.id)?;
+            let mut files_to_process: Vec<&ScannedFile> = Vec::new();
+            for sf in &scanned_files {
+                if known_mtimes
+                    .get(&sf.path)
+                    .is_some_and(|&existing| existing == sf.mtime)
+                {
+                    if let Some(ref mut cb) = progress_cb {
+                        cb(ScanProgress::FileHashed {
+                            path: sf.path.clone(),
+                        });
+                    }
+                } else {
+                    files_to_process.push(sf);
+                }
+            }
+
+            // ── Phase 1: Fast fingerprint (SHA-256 + EXIF) ──────────────
+            // Uses a background thread + channel so progress streams in real-time.
+            type Fingerprint = (PathBuf, PhotoFormat, u64, i64, String, Option<ExifData>);
+            let (tx, rx) = std::sync::mpsc::channel::<(PathBuf, Option<Fingerprint>)>();
+            let work: Vec<(PathBuf, PhotoFormat, u64, i64)> = files_to_process
                 .iter()
-                .filter(|sf| {
-                    !matches!(self.catalog.get_photo_mtime(&sf.path), Ok(Some(existing_mtime)) if existing_mtime == sf.mtime)
-                })
+                .map(|sf| (sf.path.clone(), sf.format, sf.size, sf.mtime))
                 .collect();
 
-            // Process files in parallel: hash + EXIF (no DB access here)
-            let processed: Vec<PhotoFile> = files_to_process
-                .par_iter()
-                .filter_map(|sf| {
-                    let sha256 = match hasher::compute_sha256(&sf.path) {
-                        Ok(h) => h,
-                        Err(_) => return None,
-                    };
+            std::thread::spawn(move || {
+                work.into_par_iter()
+                    .for_each_with(tx, |tx, (path, format, size, mtime)| {
+                        let data = hasher::compute_sha256(&path).ok().map(|sha256| {
+                            let exif_data = exif::extract_exif(&path);
+                            (path.clone(), format, size, mtime, sha256, exif_data)
+                        });
+                        let _ = tx.send((path, data));
+                    });
+            });
 
-                    // Only attempt perceptual hashing for formats the image crate can decode
-                    let (phash, dhash) = if sf.format.supports_perceptual_hash() {
-                        match hasher::perceptual::compute_perceptual_hashes(&sf.path) {
-                            Some((p, d)) => (Some(p), Some(d)),
-                            None => (None, None),
+            let mut fingerprints: Vec<Fingerprint> = Vec::new();
+            for (path, data) in rx {
+                if let Some(ref mut cb) = progress_cb {
+                    cb(ScanProgress::FileHashed { path });
+                }
+                if let Some(fp) = data {
+                    fingerprints.push(fp);
+                }
+            }
+
+            // ── SHA-256 dedup: skip perceptual hashing for duplicates ───
+            let mut sha_groups: HashMap<&str, Vec<usize>> = HashMap::new();
+            for (i, (_, _, _, _, sha, _)) in fingerprints.iter().enumerate() {
+                sha_groups.entry(sha.as_str()).or_default().push(i);
+            }
+
+            let unique_shas: Vec<&str> = sha_groups.keys().copied().collect();
+            let existing_phashes = self.catalog.get_phashes_by_sha256s(&unique_shas)?;
+
+            let mut needs_phash: Vec<usize> = Vec::new();
+            let mut inherited_phash: HashMap<usize, (Option<u64>, Option<u64>)> = HashMap::new();
+
+            for (sha, indices) in &sha_groups {
+                if let Some(&(phash, dhash)) = existing_phashes.get(*sha) {
+                    for &i in indices {
+                        inherited_phash.insert(i, (Some(phash), dhash));
+                    }
+                } else {
+                    let leader = indices
+                        .iter()
+                        .find(|&&i| fingerprints[i].1.supports_perceptual_hash());
+                    if let Some(&leader_idx) = leader {
+                        needs_phash.push(leader_idx);
+                    }
+                }
+            }
+
+            // ── Phase 2: Perceptual hash (only unique content, streamed) ─
+            if !needs_phash.is_empty() {
+                if let Some(ref mut cb) = progress_cb {
+                    cb(ScanProgress::AnalysisStart {
+                        count: needs_phash.len(),
+                    });
+                }
+
+                let (tx2, rx2) =
+                    std::sync::mpsc::channel::<(usize, PathBuf, Option<u64>, Option<u64>)>();
+                let phash_work: Vec<(usize, PathBuf)> = needs_phash
+                    .iter()
+                    .map(|&i| (i, fingerprints[i].0.clone()))
+                    .collect();
+
+                std::thread::spawn(move || {
+                    phash_work
+                        .into_par_iter()
+                        .for_each_with(tx2, |tx, (idx, path)| {
+                            let (p, d) = hasher::perceptual::compute_perceptual_hashes(&path)
+                                .map(|(p, d)| (Some(p), Some(d)))
+                                .unwrap_or((None, None));
+                            let _ = tx.send((idx, path, p, d));
+                        });
+                });
+
+                for (leader_idx, path, phash, dhash) in rx2 {
+                    if let Some(ref mut cb) = progress_cb {
+                        cb(ScanProgress::AnalysisDone { path });
+                    }
+                    // Propagate to all SHA-256 group members
+                    let sha = &fingerprints[leader_idx].4;
+                    if let Some(indices) = sha_groups.get(sha.as_str()) {
+                        for &i in indices {
+                            inherited_phash.insert(i, (phash, dhash));
                         }
-                    } else {
-                        (None, None)
-                    };
+                    }
+                }
+            }
 
-                    let exif_data = exif::extract_exif(&sf.path);
-
-                    Some(PhotoFile {
+            // ── Build PhotoFile vec with all data ───────────────────────
+            let source_id = source.id;
+            let processed: Vec<PhotoFile> = fingerprints
+                .iter()
+                .enumerate()
+                .map(|(i, (path, format, size, mtime, sha256, exif_data))| {
+                    let (phash, dhash) = inherited_phash.get(&i).copied().unwrap_or((None, None));
+                    PhotoFile {
                         id: 0,
-                        source_id: source.id,
-                        path: sf.path.clone(),
-                        size: sf.size,
-                        format: sf.format,
-                        sha256,
+                        source_id,
+                        path: path.clone(),
+                        size: *size,
+                        format: *format,
+                        sha256: sha256.clone(),
                         phash,
                         dhash,
-                        exif: exif_data,
-                        mtime: sf.mtime,
-                    })
+                        exif: exif_data.clone(),
+                        mtime: *mtime,
+                    }
                 })
                 .collect();
 
             // Batch insert into catalog (single transaction)
             self.catalog.upsert_photos_batch(&processed)?;
-
-            for photo in &processed {
-                if let Some(ref mut cb) = progress_cb {
-                    cb(ScanProgress::FileProcessed {
-                        path: photo.path.clone(),
-                    });
-                }
-            }
-
             self.catalog.update_source_scanned(source.id, now)?;
         }
 
@@ -301,8 +396,24 @@ impl Vault {
             }
         }
 
+        // Clean up superseded vault files (lower-quality duplicates replaced by better versions)
+        let removed_files =
+            vault_save::cleanup_superseded_vault_files(&vault_path, &all_photos, &groups);
+        let removed = removed_files.len();
+        for removed_path in &removed_files {
+            if let Some(ref mut cb) = progress_cb {
+                cb(vault_save::VaultSaveProgress::Removed {
+                    path: removed_path.clone(),
+                });
+            }
+        }
+
         if let Some(ref mut cb) = progress_cb {
-            cb(vault_save::VaultSaveProgress::Complete { copied, skipped });
+            cb(vault_save::VaultSaveProgress::Complete {
+                copied,
+                skipped,
+                removed,
+            });
         }
 
         Ok(())

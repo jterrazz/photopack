@@ -312,6 +312,54 @@ impl Catalog {
         Ok(mtime)
     }
 
+    /// Load all (path → mtime) pairs for a given source in a single query.
+    pub fn get_mtimes_for_source(&self, source_id: i64) -> Result<HashMap<PathBuf, i64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, mtime FROM photos WHERE source_id = ?1")?;
+        let rows = stmt
+            .query_map(params![source_id], |row| {
+                Ok((PathBuf::from(row.get::<_, String>(0)?), row.get::<_, i64>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows.into_iter().collect())
+    }
+
+    /// Look up existing perceptual hashes by SHA-256 values.
+    /// Returns a map of sha256 → (phash, Option<dhash>) for entries that have phash.
+    pub fn get_phashes_by_sha256s(&self, sha256s: &[&str]) -> Result<HashMap<String, (u64, Option<u64>)>> {
+        if sha256s.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut result = HashMap::new();
+        // Query in batches to avoid SQLite variable limits
+        for chunk in sha256s.chunks(500) {
+            let placeholders: Vec<String> = (0..chunk.len()).map(|i| format!("?{}", i + 1)).collect();
+            let sql = format!(
+                "SELECT sha256, phash, dhash FROM photos WHERE sha256 IN ({}) AND phash IS NOT NULL GROUP BY sha256",
+                placeholders.join(", ")
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let params: Vec<&dyn rusqlite::types::ToSql> = chunk
+                .iter()
+                .map(|s| s as &dyn rusqlite::types::ToSql)
+                .collect();
+            let rows = stmt
+                .query_map(params.as_slice(), |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)? as u64,
+                        row.get::<_, Option<i64>>(2)?.map(|v| v as u64),
+                    ))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            for (sha, phash, dhash) in rows {
+                result.insert(sha, (phash, dhash));
+            }
+        }
+        Ok(result)
+    }
+
     pub fn list_all_photos(&self) -> Result<Vec<PhotoFile>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, source_id, path, size, format, sha256, phash, dhash, mtime,

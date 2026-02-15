@@ -444,8 +444,14 @@ fn test_scan_with_progress_callback() {
                 losslessvault_core::ScanProgress::SourceStart { file_count, .. } => {
                     events.push(format!("start:{file_count}"));
                 }
-                losslessvault_core::ScanProgress::FileProcessed { .. } => {
-                    events.push("file".to_string());
+                losslessvault_core::ScanProgress::FileHashed { .. } => {
+                    events.push("hashed".to_string());
+                }
+                losslessvault_core::ScanProgress::AnalysisStart { count } => {
+                    events.push(format!("analysis_start:{count}"));
+                }
+                losslessvault_core::ScanProgress::AnalysisDone { .. } => {
+                    events.push("analysis_done".to_string());
                 }
                 losslessvault_core::ScanProgress::PhaseComplete { phase } => {
                     events.push(format!("phase:{phase}"));
@@ -454,9 +460,10 @@ fn test_scan_with_progress_callback() {
         }))
         .unwrap();
 
-    // Should have: start, 2 files, indexing phase, matching phase
+    // Should have: start, 2 hashed, analysis start+done, indexing phase, matching phase
     assert!(events.iter().any(|e| e.starts_with("start:")));
-    assert_eq!(events.iter().filter(|e| *e == "file").count(), 2);
+    assert_eq!(events.iter().filter(|e| *e == "hashed").count(), 2);
+    assert!(events.iter().any(|e| e.starts_with("analysis_start:")));
     assert!(events.contains(&"phase:indexing".to_string()));
     assert!(events.contains(&"phase:matching".to_string()));
 }
@@ -935,6 +942,328 @@ fn test_photos_have_correct_sizes() {
     }
 }
 
+// ── False positive regression tests ─────────────────────────────
+// These tests verify that the super-safe matching algorithm does NOT
+// group different photos that happen to look similar, while still
+// correctly grouping true duplicates (same photo, different format/compression).
+
+/// Regression test: sequential birthday photos with the same EXIF date+camera
+/// must NOT be grouped. This is the exact scenario that caused false positives.
+/// The two images have genuinely different structures (diagonal gradient vs
+/// concentric rings) — like consecutive shots of a birthday party.
+#[test]
+fn test_sequential_photos_same_exif_not_grouped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("photos");
+    fs::create_dir_all(&dir).unwrap();
+
+    // Photo 39: diagonal gradient — warm tones, top-left to bottom-right
+    let img1 = image::RgbImage::from_fn(64, 64, |x, y| {
+        image::Rgb([
+            (x * 4) as u8,
+            (y * 4) as u8,
+            ((x + y) * 2) as u8,
+        ])
+    });
+    img1.save(dir.join("birthday_39.jpg")).unwrap();
+
+    // Photo 40: concentric rings — structurally very different
+    let img2 = image::RgbImage::from_fn(64, 64, |x, y| {
+        let cx = (x as f32 - 32.0).abs();
+        let cy = (y as f32 - 32.0).abs();
+        let dist = ((cx * cx + cy * cy).sqrt() * 8.0) as u8;
+        image::Rgb([dist, 255 - dist, 128])
+    });
+    img2.save(dir.join("birthday_40.jpg")).unwrap();
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&dir).unwrap();
+    vault.scan(None).unwrap();
+
+    let groups = vault.groups().unwrap();
+    assert_eq!(
+        groups.len(),
+        0,
+        "Sequential birthday photos must NOT be grouped as duplicates"
+    );
+}
+
+/// Similar solid-color photos must NOT be grouped.
+/// Tests: two photos of a blue sky (similar brightness/color) stay separate.
+#[test]
+fn test_similar_solid_color_photos_not_grouped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("photos");
+    fs::create_dir_all(&dir).unwrap();
+
+    // Blue sky — mostly uniform blue
+    let sky1 = image::RgbImage::from_fn(64, 64, |x, y| {
+        image::Rgb([
+            50u8.wrapping_add((x / 8) as u8),
+            100u8.wrapping_add((y / 8) as u8),
+            200,
+        ])
+    });
+    sky1.save(dir.join("sky1.jpg")).unwrap();
+
+    // Slightly different blue sky — same palette but different structure
+    let sky2 = image::RgbImage::from_fn(64, 64, |x, y| {
+        image::Rgb([
+            55u8.wrapping_add((y / 8) as u8),  // swapped x/y gradient
+            105u8.wrapping_add((x / 8) as u8),
+            200,
+        ])
+    });
+    sky2.save(dir.join("sky2.jpg")).unwrap();
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&dir).unwrap();
+    vault.scan(None).unwrap();
+
+    let groups = vault.groups().unwrap();
+    assert_eq!(
+        groups.len(),
+        0,
+        "Similar but different photos (sky variants) must NOT be grouped"
+    );
+}
+
+/// Five unique photos with different patterns must all stay ungrouped.
+/// Tests that the algorithm handles multiple similar-ish photos at scale.
+#[test]
+fn test_five_unique_patterns_all_ungrouped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("photos");
+    fs::create_dir_all(&dir).unwrap();
+
+    // Pattern 1: Diagonal gradient
+    create_jpeg(&dir.join("photo_1.jpg"), 200, 50, 50);
+
+    // Pattern 2: Vertical gradient (different from diagonal)
+    let vert = image::RgbImage::from_fn(64, 64, |_x, y| {
+        image::Rgb([0, (y * 4) as u8, 0])
+    });
+    vert.save(dir.join("photo_2.jpg")).unwrap();
+
+    // Pattern 3: Horizontal gradient
+    let horiz = image::RgbImage::from_fn(64, 64, |x, _y| {
+        image::Rgb([(x * 4) as u8, 0, 0])
+    });
+    horiz.save(dir.join("photo_3.jpg")).unwrap();
+
+    // Pattern 4: Checkerboard
+    let checker = image::RgbImage::from_fn(64, 64, |x, y| {
+        if (x / 8 + y / 8) % 2 == 0 {
+            image::Rgb([0, 0, 0])
+        } else {
+            image::Rgb([255, 255, 255])
+        }
+    });
+    checker.save(dir.join("photo_4.jpg")).unwrap();
+
+    // Pattern 5: Concentric rings
+    let rings = image::RgbImage::from_fn(64, 64, |x, y| {
+        let cx = (x as f32 - 32.0).abs();
+        let cy = (y as f32 - 32.0).abs();
+        let dist = (cx * cx + cy * cy).sqrt() as u8;
+        image::Rgb([dist.wrapping_mul(4), dist.wrapping_mul(2), 255 - dist.wrapping_mul(3)])
+    });
+    rings.save(dir.join("photo_5.jpg")).unwrap();
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&dir).unwrap();
+    vault.scan(None).unwrap();
+
+    let groups = vault.groups().unwrap();
+    assert_eq!(
+        groups.len(),
+        0,
+        "5 structurally different photos must all remain ungrouped"
+    );
+    assert_eq!(vault.status().unwrap().total_photos, 5);
+}
+
+/// Same JPEG recompressed at lower quality must still be grouped.
+/// This tests perceptual hash robustness to compression artifacts.
+#[test]
+fn test_recompressed_jpeg_still_grouped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("photos");
+    fs::create_dir_all(&dir).unwrap();
+
+    // Create original image
+    let img = image::RgbImage::from_fn(64, 64, |x, y| {
+        image::Rgb([
+            100u8.wrapping_add((x * 3) as u8),
+            100u8.wrapping_add((y * 3) as u8),
+            100u8.wrapping_add(((x + y) * 2) as u8),
+        ])
+    });
+
+    // Save at high quality
+    {
+        let file = fs::File::create(dir.join("original.jpg")).unwrap();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(file, 95);
+        encoder
+            .encode(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::Rgb8)
+            .unwrap();
+    }
+
+    // Save same image at low quality (more compression artifacts)
+    {
+        let file = fs::File::create(dir.join("recompressed.jpg")).unwrap();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(file, 50);
+        encoder
+            .encode(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::Rgb8)
+            .unwrap();
+    }
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&dir).unwrap();
+    vault.scan(None).unwrap();
+
+    let groups = vault.groups().unwrap();
+    assert_eq!(
+        groups.len(),
+        1,
+        "Same image at different JPEG quality levels must be grouped"
+    );
+    assert_eq!(groups[0].members.len(), 2);
+}
+
+/// Same visual content in JPEG + PNG + TIFF (3 formats) must all merge into one group.
+#[test]
+fn test_three_format_merge_jpeg_png_tiff() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("photos");
+    fs::create_dir_all(&dir).unwrap();
+
+    // Same image content in 3 formats
+    create_jpeg(&dir.join("photo.jpg"), 150, 80, 200);
+    create_png(&dir.join("photo.png"), 150, 80, 200);
+
+    // TIFF — same pixel data
+    let img = image::RgbImage::from_fn(64, 64, |x, y| {
+        image::Rgb([
+            150u8.wrapping_add((x * 3) as u8),
+            80u8.wrapping_add((y * 3) as u8),
+            200u8.wrapping_add(((x + y) * 2) as u8),
+        ])
+    });
+    img.save(dir.join("photo.tiff")).unwrap();
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&dir).unwrap();
+    vault.scan(None).unwrap();
+
+    let groups = vault.groups().unwrap();
+    assert_eq!(
+        groups.len(),
+        1,
+        "Same content in JPEG+PNG+TIFF must merge into one group"
+    );
+    assert_eq!(groups[0].members.len(), 3);
+}
+
+/// Mix of duplicates and uniques: 2 duplicate pairs + 3 unique photos = 2 groups, 3 ungrouped.
+#[test]
+fn test_mixed_duplicates_and_uniques_correct_grouping() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("photos");
+    fs::create_dir_all(&dir).unwrap();
+
+    // Duplicate pair 1: exact copy
+    create_jpeg(&dir.join("sunset_a.jpg"), 200, 100, 50);
+    copy_file(&dir.join("sunset_a.jpg"), &dir.join("sunset_b.jpg"));
+
+    // Duplicate pair 2: JPEG + PNG same content
+    create_jpeg(&dir.join("beach.jpg"), 50, 150, 200);
+    create_png(&dir.join("beach.png"), 50, 150, 200);
+
+    // Unique 1: checkerboard
+    let checker = image::RgbImage::from_fn(64, 64, |x, y| {
+        if (x / 8 + y / 8) % 2 == 0 {
+            image::Rgb([0, 0, 0])
+        } else {
+            image::Rgb([255, 255, 255])
+        }
+    });
+    checker.save(dir.join("unique_1.jpg")).unwrap();
+
+    // Unique 2: horizontal stripes
+    let stripes = image::RgbImage::from_fn(64, 64, |_x, y| {
+        if y % 16 < 8 {
+            image::Rgb([255, 0, 0])
+        } else {
+            image::Rgb([0, 0, 255])
+        }
+    });
+    stripes.save(dir.join("unique_2.jpg")).unwrap();
+
+    // Unique 3: concentric rings
+    let rings = image::RgbImage::from_fn(64, 64, |x, y| {
+        let dist = (((x as f32 - 32.0).powi(2) + (y as f32 - 32.0).powi(2)).sqrt()) as u8;
+        image::Rgb([dist.wrapping_mul(4), 128, 255 - dist.wrapping_mul(3)])
+    });
+    rings.save(dir.join("unique_3.jpg")).unwrap();
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&dir).unwrap();
+    vault.scan(None).unwrap();
+
+    let status = vault.status().unwrap();
+    assert_eq!(status.total_photos, 7, "7 files total");
+    assert_eq!(status.total_groups, 2, "2 duplicate groups");
+    // 2 groups × 2 members = 4 duplicates, 3 unique photos
+}
+
+/// Cross-directory: same photo in 3 directories (exact copies) must merge into 1 group.
+/// Different photos across directories must NOT merge.
+#[test]
+fn test_cross_directory_same_and_different_photos() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir_a = tmp.path().join("camera_roll");
+    let dir_b = tmp.path().join("icloud_backup");
+    let dir_c = tmp.path().join("google_photos");
+    fs::create_dir_all(&dir_a).unwrap();
+    fs::create_dir_all(&dir_b).unwrap();
+    fs::create_dir_all(&dir_c).unwrap();
+
+    // Photo A: exists in all 3 directories (exact copies)
+    create_jpeg(&dir_a.join("vacation.jpg"), 100, 150, 200);
+    copy_file(&dir_a.join("vacation.jpg"), &dir_b.join("vacation.jpg"));
+    copy_file(&dir_a.join("vacation.jpg"), &dir_c.join("vacation.jpg"));
+
+    // Photo B: unique to dir_a
+    create_jpeg(&dir_a.join("selfie.jpg"), 200, 50, 100);
+
+    // Photo C: unique to dir_b (different pattern)
+    let checker = image::RgbImage::from_fn(64, 64, |x, y| {
+        if (x / 8 + y / 8) % 2 == 0 {
+            image::Rgb([0, 0, 0])
+        } else {
+            image::Rgb([255, 255, 255])
+        }
+    });
+    checker.save(dir_b.join("document.jpg")).unwrap();
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&dir_a).unwrap();
+    vault.add_source(&dir_b).unwrap();
+    vault.add_source(&dir_c).unwrap();
+    vault.scan(None).unwrap();
+
+    let status = vault.status().unwrap();
+    assert_eq!(status.total_photos, 5, "5 files total");
+    assert_eq!(
+        status.total_groups, 1,
+        "Only 1 group (the 3 vacation copies). selfie and document must stay ungrouped."
+    );
+
+    let groups = vault.groups().unwrap();
+    assert_eq!(groups[0].members.len(), 3, "vacation group has 3 members");
+}
+
 // ── Source-of-truth quality preservation ──────────────────────────
 // The vault's primary goal is preserving the highest-quality version
 // of each photo. These tests verify SOT election across all format
@@ -1377,6 +1706,7 @@ fn test_vault_save_incremental_with_cross_format_group() {
             if let losslessvault_core::vault_save::VaultSaveProgress::Complete {
                 copied,
                 skipped,
+                ..
             } = progress
             {
                 second_copied = copied;
@@ -1706,7 +2036,7 @@ fn test_vault_save_empty_catalog() {
                 losslessvault_core::vault_save::VaultSaveProgress::Start { total: t } => {
                     total = t;
                 }
-                losslessvault_core::vault_save::VaultSaveProgress::Complete { copied: c, skipped: s } => {
+                losslessvault_core::vault_save::VaultSaveProgress::Complete { copied: c, skipped: s, .. } => {
                     copied = c;
                     skipped = s;
                 }
@@ -1867,11 +2197,15 @@ fn test_vault_save_progress_events_order() {
                 losslessvault_core::vault_save::VaultSaveProgress::Skipped { .. } => {
                     events.push("skipped".to_string());
                 }
+                losslessvault_core::vault_save::VaultSaveProgress::Removed { .. } => {
+                    events.push("removed".to_string());
+                }
                 losslessvault_core::vault_save::VaultSaveProgress::Complete {
                     copied,
                     skipped,
+                    removed,
                 } => {
-                    events.push(format!("complete:{copied}:{skipped}"));
+                    events.push(format!("complete:{copied}:{skipped}:{removed}"));
                 }
             }
         }))
@@ -1880,7 +2214,7 @@ fn test_vault_save_progress_events_order() {
     // Should be: start → copied × 2 → complete
     assert_eq!(events[0], "start:2");
     assert_eq!(events.iter().filter(|e| *e == "copied").count(), 2);
-    assert!(events.last().unwrap().starts_with("complete:2:0"));
+    assert!(events.last().unwrap().starts_with("complete:2:0:0"));
 }
 
 #[test]
@@ -2091,6 +2425,244 @@ fn test_vault_save_deleted_vault_path_errors() {
 
     let err = vault.vault_save(None).unwrap_err();
     assert!(err.to_string().contains("does not exist"));
+}
+
+// ── Vault quality upgrade tests ─────────────────────────────────
+//
+// These tests verify that vault sync replaces lower-quality vault files
+// with higher-quality versions when a better source-of-truth is found.
+
+/// Scenario: vault has JPEG from earlier sync, then a RAW of the same photo is
+/// added to sources. After rescan + vault sync, the RAW should be in the vault
+/// and the old JPEG should be removed.
+#[test]
+fn test_vault_sync_replaces_lower_quality_with_raw() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source_a = tmp.path().join("source_a");
+    let source_b = tmp.path().join("source_b");
+    let vault_dir = tmp.path().join("vault");
+    fs::create_dir_all(&source_a).unwrap();
+    fs::create_dir_all(&vault_dir).unwrap();
+
+    // Step 1: JPEG in source A, scan and vault sync
+    create_jpeg(&source_a.join("photo.jpg"), 100, 100, 100);
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&source_a).unwrap();
+    vault.scan(None).unwrap();
+    vault.set_vault_path(&vault_dir).unwrap();
+    vault.vault_save(None).unwrap();
+
+    // Vault should have the JPEG
+    let vault_files_before: Vec<_> = walkdir::WalkDir::new(&vault_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .collect();
+    assert_eq!(vault_files_before.len(), 1);
+    assert_eq!(
+        vault_files_before[0].path().extension().unwrap(),
+        "jpg",
+        "Initially vault should contain the JPEG"
+    );
+
+    // Step 2: Add a RAW (CR2) of the same photo in a new source
+    fs::create_dir_all(&source_b).unwrap();
+    copy_file(&source_a.join("photo.jpg"), &source_b.join("photo.cr2"));
+    vault.add_source(&source_b).unwrap();
+    vault.scan(None).unwrap();
+
+    // Verify CR2 is elected SOT
+    let groups = vault.groups().unwrap();
+    assert!(!groups.is_empty(), "Should have at least one duplicate group");
+    let sot = groups[0]
+        .members
+        .iter()
+        .find(|m| m.id == groups[0].source_of_truth_id)
+        .unwrap();
+    assert_eq!(
+        sot.format,
+        losslessvault_core::domain::PhotoFormat::Cr2,
+        "CR2 should be elected SOT over JPEG"
+    );
+
+    // Step 3: Vault sync again — should copy CR2 and remove old JPEG
+    let mut removed_count = 0;
+    let mut copied_count = 0;
+    vault
+        .vault_save(Some(&mut |progress| {
+            if let losslessvault_core::vault_save::VaultSaveProgress::Complete {
+                copied,
+                removed,
+                ..
+            } = progress
+            {
+                copied_count = copied;
+                removed_count = removed;
+            }
+        }))
+        .unwrap();
+
+    assert!(copied_count >= 1, "Should copy the CR2 to vault");
+
+    // Verify vault now has CR2 and no JPEG
+    let vault_files_after: Vec<_> = walkdir::WalkDir::new(&vault_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .collect();
+    let cr2_files: Vec<_> = vault_files_after
+        .iter()
+        .filter(|e| e.path().extension().map(|x| x == "cr2").unwrap_or(false))
+        .collect();
+    let jpg_files: Vec<_> = vault_files_after
+        .iter()
+        .filter(|e| e.path().extension().map(|x| x == "jpg").unwrap_or(false))
+        .collect();
+    assert!(
+        cr2_files.len() >= 1,
+        "Vault should contain the CR2 (higher quality)"
+    );
+    assert_eq!(
+        jpg_files.len(),
+        0,
+        "Old JPEG should be removed from vault after quality upgrade"
+    );
+}
+
+/// Same scenario but with TIFF upgrading JPEG.
+#[test]
+fn test_vault_sync_replaces_jpeg_with_tiff() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source_a = tmp.path().join("source_a");
+    let source_b = tmp.path().join("source_b");
+    let vault_dir = tmp.path().join("vault");
+    fs::create_dir_all(&source_a).unwrap();
+    fs::create_dir_all(&vault_dir).unwrap();
+
+    // Step 1: JPEG in source, vault sync
+    create_jpeg(&source_a.join("photo.jpg"), 120, 80, 200);
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&source_a).unwrap();
+    vault.scan(None).unwrap();
+    vault.set_vault_path(&vault_dir).unwrap();
+    vault.vault_save(None).unwrap();
+
+    assert_eq!(count_files_recursive(&vault_dir), 1);
+
+    // Step 2: Add TIFF of same photo
+    fs::create_dir_all(&source_b).unwrap();
+    copy_file(&source_a.join("photo.jpg"), &source_b.join("photo.tiff"));
+    vault.add_source(&source_b).unwrap();
+    vault.scan(None).unwrap();
+
+    // Step 3: Vault sync — TIFF should replace JPEG
+    vault.vault_save(None).unwrap();
+
+    let vault_files: Vec<_> = walkdir::WalkDir::new(&vault_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .collect();
+    let tiff_count = vault_files
+        .iter()
+        .filter(|e| e.path().extension().map(|x| x == "tiff").unwrap_or(false))
+        .count();
+    let jpg_count = vault_files
+        .iter()
+        .filter(|e| e.path().extension().map(|x| x == "jpg").unwrap_or(false))
+        .count();
+    assert!(tiff_count >= 1, "Vault should contain the TIFF");
+    assert_eq!(
+        jpg_count, 0,
+        "Old JPEG should be removed from vault after TIFF upgrade"
+    );
+}
+
+/// When both versions are in sources simultaneously (not incremental upgrade),
+/// only the best quality should end up in the vault.
+#[test]
+fn test_vault_sync_only_best_quality_no_accumulation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("photos");
+    let vault_dir = tmp.path().join("vault");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&vault_dir).unwrap();
+
+    // Both formats available from the start
+    create_jpeg(&source.join("photo.jpg"), 100, 100, 100);
+    copy_file(&source.join("photo.jpg"), &source.join("photo.cr2"));
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&source).unwrap();
+    vault.scan(None).unwrap();
+    vault.set_vault_path(&vault_dir).unwrap();
+    vault.vault_save(None).unwrap();
+
+    // Only 1 file (CR2) should be in vault
+    let vault_files: Vec<_> = walkdir::WalkDir::new(&vault_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .collect();
+    assert_eq!(vault_files.len(), 1, "Only SOT should be in vault");
+    assert_eq!(
+        vault_files[0].path().extension().unwrap(),
+        "cr2",
+        "CR2 should be the only file in vault"
+    );
+}
+
+/// Verify that vault sync reports removed count in progress events.
+#[test]
+fn test_vault_sync_quality_upgrade_reports_removed_count() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source_a = tmp.path().join("source_a");
+    let source_b = tmp.path().join("source_b");
+    let vault_dir = tmp.path().join("vault");
+    fs::create_dir_all(&source_a).unwrap();
+    fs::create_dir_all(&vault_dir).unwrap();
+
+    // Initial JPEG sync
+    create_jpeg(&source_a.join("photo.jpg"), 100, 100, 100);
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&source_a).unwrap();
+    vault.scan(None).unwrap();
+    vault.set_vault_path(&vault_dir).unwrap();
+    vault.vault_save(None).unwrap();
+
+    // Add RAW, rescan
+    fs::create_dir_all(&source_b).unwrap();
+    copy_file(&source_a.join("photo.jpg"), &source_b.join("photo.cr2"));
+    vault.add_source(&source_b).unwrap();
+    vault.scan(None).unwrap();
+
+    // Vault sync should report removal
+    let mut events = Vec::new();
+    vault
+        .vault_save(Some(&mut |progress| match progress {
+            losslessvault_core::vault_save::VaultSaveProgress::Removed { .. } => {
+                events.push("removed".to_string());
+            }
+            losslessvault_core::vault_save::VaultSaveProgress::Complete {
+                removed, ..
+            } => {
+                events.push(format!("complete_removed:{removed}"));
+            }
+            _ => {}
+        }))
+        .unwrap();
+
+    assert!(
+        events.contains(&"removed".to_string()),
+        "Should emit Removed event for superseded JPEG"
+    );
+    assert!(
+        events.iter().any(|e| e.starts_with("complete_removed:") && !e.ends_with(":0")),
+        "Complete event should report non-zero removed count"
+    );
 }
 
 // ── Export (HEIC conversion) tests ──────────────────────────────
