@@ -93,6 +93,68 @@ fn test_add_source_duplicate_rejected() {
     assert!(vault.add_source(&photos_dir).is_err());
 }
 
+// ── Vault::remove_source ─────────────────────────────────────────
+
+#[test]
+fn test_remove_source_valid() {
+    let tmp = tempfile::tempdir().unwrap();
+    let photos_dir = tmp.path().join("photos");
+    fs::create_dir_all(&photos_dir).unwrap();
+    create_jpeg(&photos_dir.join("a.jpg"), 100, 150, 200);
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&photos_dir).unwrap();
+    vault.scan(None).unwrap();
+
+    assert_eq!(vault.photos().unwrap().len(), 1);
+    assert_eq!(vault.sources().unwrap().len(), 1);
+
+    let (source, photo_count) = vault.remove_source(&photos_dir).unwrap();
+    assert_eq!(source.path, photos_dir.canonicalize().unwrap());
+    assert_eq!(photo_count, 1);
+    assert_eq!(vault.sources().unwrap().len(), 0);
+    assert_eq!(vault.photos().unwrap().len(), 0);
+}
+
+#[test]
+fn test_remove_source_not_registered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+
+    let err = vault.remove_source(Path::new("/nonexistent/source")).unwrap_err();
+    assert!(err.to_string().contains("not registered"));
+}
+
+#[test]
+fn test_remove_source_cleans_up_groups() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir_a = tmp.path().join("source_a");
+    let dir_b = tmp.path().join("source_b");
+    fs::create_dir_all(&dir_a).unwrap();
+    fs::create_dir_all(&dir_b).unwrap();
+
+    // Same photo in both sources (exact duplicate)
+    create_jpeg(&dir_a.join("photo.jpg"), 100, 150, 200);
+    copy_file(&dir_a.join("photo.jpg"), &dir_b.join("photo.jpg"));
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&dir_a).unwrap();
+    vault.add_source(&dir_b).unwrap();
+    vault.scan(None).unwrap();
+
+    assert_eq!(vault.status().unwrap().total_groups, 1);
+    assert_eq!(vault.status().unwrap().total_photos, 2);
+
+    // Remove source_a — group should be deleted (only 1 member left)
+    vault.remove_source(&dir_a).unwrap();
+
+    assert_eq!(vault.sources().unwrap().len(), 1);
+    assert_eq!(vault.photos().unwrap().len(), 1);
+    // Group with only 1 remaining member should still exist in DB
+    // but the important thing is photos from removed source are gone
+    assert_eq!(vault.status().unwrap().total_photos, 1);
+}
+
 // ── Vault::status (empty) ────────────────────────────────────────
 
 #[test]

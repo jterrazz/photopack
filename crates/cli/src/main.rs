@@ -20,7 +20,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Manage photo sources: add, scan, or list directories
+    /// Manage photo sources: add, rm, scan, or list directories
     Sources {
         #[command(subcommand)]
         action: Option<SourcesAction>,
@@ -55,6 +55,11 @@ enum SourcesAction {
     },
     /// Scan all sources for photos and find duplicates
     Scan,
+    /// Unregister a source and remove its photos from the catalog
+    Rm {
+        /// Path to the source directory
+        path: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -111,6 +116,7 @@ fn main() -> Result<()> {
             None => commands::sources::list(&vault)?,
             Some(SourcesAction::Add { path }) => commands::sources::add(&vault, path)?,
             Some(SourcesAction::Scan) => commands::sources::scan(&mut vault)?,
+            Some(SourcesAction::Rm { path }) => commands::sources::rm(&vault, path)?,
         },
         Commands::Catalog { action } => match action {
             None => commands::status::run(&vault, false)?,

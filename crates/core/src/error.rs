@@ -26,6 +26,9 @@ pub enum Error {
     #[error("source already registered: {}", .0.display())]
     SourceAlreadyExists(PathBuf),
 
+    #[error("source not registered: {}", .0.display())]
+    SourceNotRegistered(PathBuf),
+
     #[error("group not found: {0}")]
     GroupNotFound(i64),
 

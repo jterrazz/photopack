@@ -90,6 +90,74 @@ impl Catalog {
         Ok(())
     }
 
+    /// Remove a source and all its photos from the catalog.
+    /// Also cleans up group_members and empty duplicate_groups.
+    pub fn remove_source(&self, path: &Path) -> Result<(Source, usize)> {
+        // Try canonicalize, fall back to raw path (source dir may have been deleted)
+        let lookup_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let path_str = lookup_path.to_string_lossy();
+
+        // Look up the source
+        let source: Source = self
+            .conn
+            .query_row(
+                "SELECT id, path, last_scanned FROM sources WHERE path = ?1",
+                params![path_str.as_ref()],
+                |row| {
+                    Ok(Source {
+                        id: row.get(0)?,
+                        path: PathBuf::from(row.get::<_, String>(1)?),
+                        last_scanned: row.get(2)?,
+                    })
+                },
+            )
+            .map_err(|_| Error::SourceNotRegistered(lookup_path))?;
+
+        // Count photos before deletion
+        let photo_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM photos WHERE source_id = ?1",
+            params![source.id],
+            |row| row.get(0),
+        )?;
+
+        // Delete group_members for photos in this source
+        self.conn.execute(
+            "DELETE FROM group_members WHERE photo_id IN (SELECT id FROM photos WHERE source_id = ?1)",
+            params![source.id],
+        )?;
+
+        // Delete groups whose source_of_truth is a photo in this source, or that are now empty.
+        // Must happen BEFORE deleting photos (groups.source_of_truth_id → photos.id FK).
+        self.conn.execute(
+            "DELETE FROM group_members WHERE group_id IN (
+                SELECT id FROM duplicate_groups
+                WHERE source_of_truth_id IN (SELECT id FROM photos WHERE source_id = ?1)
+                   OR id NOT IN (SELECT DISTINCT group_id FROM group_members)
+            )",
+            params![source.id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM duplicate_groups
+             WHERE source_of_truth_id IN (SELECT id FROM photos WHERE source_id = ?1)
+                OR id NOT IN (SELECT DISTINCT group_id FROM group_members)",
+            params![source.id],
+        )?;
+
+        // Delete photos
+        self.conn.execute(
+            "DELETE FROM photos WHERE source_id = ?1",
+            params![source.id],
+        )?;
+
+        // Delete the source
+        self.conn.execute(
+            "DELETE FROM sources WHERE id = ?1",
+            params![source.id],
+        )?;
+
+        Ok((source, photo_count as usize))
+    }
+
     // ── Photos ───────────────────────────────────────────────────────
 
     pub fn upsert_photo(&self, photo: &PhotoFile) -> Result<i64> {
@@ -694,6 +762,44 @@ mod tests {
 
         let sources = catalog.list_sources().unwrap();
         assert_eq!(sources.len(), 2);
+    }
+
+    #[test]
+    fn test_remove_source() {
+        let (catalog, source, _tmp) = make_catalog_with_source();
+        let photo = make_photo(source.id, "/tmp/test.jpg", "abc123");
+        catalog.upsert_photo(&photo).unwrap();
+
+        assert_eq!(catalog.list_sources().unwrap().len(), 1);
+        assert_eq!(catalog.count_photos().unwrap(), 1);
+
+        let (removed, count) = catalog.remove_source(&source.path).unwrap();
+        assert_eq!(removed.id, source.id);
+        assert_eq!(count, 1);
+        assert_eq!(catalog.list_sources().unwrap().len(), 0);
+        assert_eq!(catalog.count_photos().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_remove_source_not_registered() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let err = catalog.remove_source(Path::new("/nonexistent")).unwrap_err();
+        assert!(matches!(err, Error::SourceNotRegistered(_)));
+    }
+
+    #[test]
+    fn test_remove_source_cleans_empty_groups() {
+        let (catalog, source, _tmp) = make_catalog_with_source();
+        let id_a = catalog.upsert_photo(&make_photo(source.id, "/tmp/a.jpg", "aaa")).unwrap();
+        let id_b = catalog.upsert_photo(&make_photo(source.id, "/tmp/b.jpg", "aaa")).unwrap();
+        catalog.insert_group(id_a, Confidence::Certain, &[id_a, id_b]).unwrap();
+
+        assert_eq!(catalog.count_groups().unwrap(), 1);
+
+        catalog.remove_source(&source.path).unwrap();
+
+        assert_eq!(catalog.count_groups().unwrap(), 0);
+        assert_eq!(catalog.count_photos().unwrap(), 0);
     }
 
     // ── Photo tests ──────────────────────────────────────────────

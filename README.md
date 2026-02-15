@@ -36,6 +36,7 @@ cargo run -p losslessvault-cli -- export
 | `lsvault sources` | List registered source directories |
 | `lsvault sources add <path>` | Register a directory as a photo source |
 | `lsvault sources scan` | Scan all sources, hash files, and find duplicates |
+| `lsvault sources rm <path>` | Unregister a source and remove its photos from the catalog |
 | `lsvault catalog` | Show catalog dashboard (overview, sources, vault) |
 | `lsvault catalog list` | Show full files table with roles and vault eligibility |
 | `lsvault catalog duplicates` | List all duplicate groups |
@@ -191,7 +192,7 @@ lossless-vault/
 ## Development
 
 ```bash
-# Run all tests (156 unit + 95 e2e)
+# Run all tests (159 unit + 98 e2e)
 cargo test --workspace
 
 # Lint
@@ -202,7 +203,7 @@ cargo clippy --workspace
 
 The test suite covers:
 
-- **Catalog** (18 tests) — CRUD operations, format/confidence roundtrip, mtime tracking, config persistence
+- **Catalog** (21 tests) — CRUD operations, format/confidence roundtrip, mtime tracking, config persistence, source removal
 - **Matching** (25 tests) — All 4 phases, cross-format grouping, transitive merge, full pipeline
 - **Catalog dashboard** (28 tests) — format_size, source_display_name, StatusData, is_duplicate, vault_eligible, compute_aggregates, compute_source_stats, sort_photos_for_display
 - **Vault sync** (23 tests) — Date parsing, EXIF/mtime fallback, photo selection, collision handling, incremental copy

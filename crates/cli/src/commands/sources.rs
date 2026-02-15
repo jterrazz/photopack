@@ -34,6 +34,16 @@ pub fn add(vault: &Vault, path: PathBuf) -> Result<()> {
     Ok(())
 }
 
+pub fn rm(vault: &Vault, path: PathBuf) -> Result<()> {
+    let (source, photo_count) = vault.remove_source(&path)?;
+    println!(
+        "Removed source: {} ({} photos removed from catalog)",
+        source.path.display(),
+        photo_count
+    );
+    Ok(())
+}
+
 pub fn scan(vault: &mut Vault) -> Result<()> {
     let pb = ProgressBar::new(0);
     pb.set_style(

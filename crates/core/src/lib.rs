@@ -50,6 +50,11 @@ impl Vault {
         self.catalog.add_source(path)
     }
 
+    /// Remove a source and all its photos from the catalog.
+    pub fn remove_source(&self, path: &Path) -> Result<(Source, usize)> {
+        self.catalog.remove_source(path)
+    }
+
     /// Scan all registered sources, hash files, find duplicates, and rank them.
     /// Calls `progress_cb` with progress updates if provided.
     pub fn scan(&mut self, mut progress_cb: Option<&mut dyn FnMut(ScanProgress)>) -> Result<()> {

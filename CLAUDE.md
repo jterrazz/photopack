@@ -35,7 +35,7 @@ cargo clippy --workspace
 
 ## Testing
 
-- 251 tests total (28 CLI + 128 core + 95 e2e)
+- 257 tests total (28 CLI + 131 core + 98 e2e)
 - E2E tests in `crates/core/tests/vault_e2e.rs` use real JPEG/PNG generation via the `image` crate
 - Cross-format testing: use `create_file_with_jpeg_bytes()` to write JPEG bytes to `.cr2`/`.heic`/`.dng` etc. — scanner assigns format from extension, hashes work on raw bytes
 - Use structurally different patterns (gradient vs checkerboard vs stripes) in tests to ensure distinct perceptual hashes — color-only differences are not enough
