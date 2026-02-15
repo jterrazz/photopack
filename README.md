@@ -184,7 +184,7 @@ photopack/
 │   │   │   ├── manifest.rs     # Embedded manifest (SQLite, hash→metadata)
 │   │   │   └── export.rs       # HEIC export via macOS sips
 │   │   └── tests/
-│   │       └── vault_e2e.rs    # 124 end-to-end integration tests
+│   │       └── vault_e2e.rs    # 129 end-to-end integration tests
 │   └── cli/                    # Binary crate (photopack)
 │       └── src/
 │           ├── main.rs         # clap CLI definition
@@ -220,7 +220,7 @@ photopack/
 ## Development
 
 ```bash
-# Run all tests (367 total)
+# Run all tests (375 total)
 cargo test --workspace
 
 # Lint
