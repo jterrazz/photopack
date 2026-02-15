@@ -35,13 +35,13 @@ pub enum Error {
     #[error("unsupported file format: {}", .0.display())]
     UnsupportedFormat(PathBuf),
 
-    #[error("vault path not configured — run `photopack vault set <path>` first")]
+    #[error("vault path not configured — run `photopack pack <path>` first")]
     VaultPathNotSet,
 
     #[error("vault path does not exist: {}", .0.display())]
     VaultPathNotFound(PathBuf),
 
-    #[error("export path not configured — run `photopack export set <path>` first")]
+    #[error("export path not configured — run `photopack pack <path> --heic` first")]
     ExportPathNotSet,
 
     #[error("export path does not exist: {}", .0.display())]

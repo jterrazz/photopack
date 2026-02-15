@@ -12,7 +12,7 @@ fn list_groups(vault: &Vault) -> Result<()> {
     let groups = vault.groups()?;
 
     if groups.is_empty() {
-        println!("No duplicates found. Run `photopack sources scan` first.");
+        println!("No duplicates found. Run `photopack scan` first.");
         return Ok(());
     }
 

@@ -19,43 +19,39 @@ Your photos are a mess. Same shot saved as iPhone HEIC, Lightroom JPEG, and a RA
 cargo install photopack
 
 # Point it at your photo sources
-photopack sources add ~/Photos
-photopack sources add ~/iCloud
-photopack sources add /Volumes/Backup/Photos
+photopack add ~/Photos
+photopack add ~/iCloud
+photopack add /Volumes/Backup/Photos
 
 # Scan — finds all duplicates across formats
 photopack scan
 
 # See what it found
-photopack catalog
-photopack catalog duplicates
+photopack status
+photopack dupes
 
 # Pack into a clean archive (original formats, date-organized)
-photopack vault set ~/PhotoArchive
-photopack vault sync
+photopack pack ~/PhotoArchive
 
 # Or export as HEIC (3x smaller, macOS)
-photopack export set ~/PhotosPacked
-photopack export --quality 85
+photopack pack ~/PhotosPacked --heic --quality 85
 ```
 
 ## CLI Commands
 
 | Command | Description |
 |---------|-------------|
-| `photopack sources` | List registered source directories |
-| `photopack sources add <path>` | Register a directory as a photo source |
-| `photopack sources scan` | Scan all sources, hash files, and find duplicates |
-| `photopack sources rm <path>` | Unregister a source and remove its photos from the catalog |
-| `photopack catalog` | Show catalog dashboard (overview, sources, vault) |
-| `photopack catalog list` | Show full files table with roles and vault eligibility |
-| `photopack catalog duplicates` | List all duplicate groups |
-| `photopack catalog duplicates <id>` | Show group detail with source-of-truth marker |
-| `photopack vault set <path>` | Set the vault directory (auto-registers as scan source) |
-| `photopack vault sync` | Sync deduplicated best-quality photos to the vault |
-| `photopack export set <path>` | Set the HEIC export destination directory |
-| `photopack export show` | Show the current export path |
-| `photopack export [--quality 85]` | Convert deduplicated photos to HEIC (macOS) |
+| `photopack add <path>` | Register a directory as a photo source |
+| `photopack rm <path>` | Unregister a source and remove its photos from the catalog |
+| `photopack scan` | Scan all sources, hash files, and find duplicates |
+| `photopack status` | Show catalog dashboard (overview, sources, vault) |
+| `photopack status --files` | Show full files table with roles and vault eligibility |
+| `photopack dupes` | List all duplicate groups |
+| `photopack dupes <id>` | Show group detail with source-of-truth marker |
+| `photopack pack <path>` | Set vault path and sync deduplicated best-quality photos |
+| `photopack pack` | Re-sync using saved vault path |
+| `photopack pack <path> --heic` | Set export path and convert to HEIC (macOS) |
+| `photopack pack --heic [--quality 85]` | Re-export using saved path with quality control |
 
 The catalog defaults to `~/.photopack/catalog.db`. Override with `--catalog <path>`.
 
@@ -120,28 +116,28 @@ If 4 copies of the same photo exist, only 1 image is decoded instead of 4. Re-sc
 
 ### Catalog Dashboard
 
-`photopack catalog` displays a rich overview:
+`photopack status` displays a rich overview:
 
 - **Overview** — Photo count, unique count, duplicate groups, disk usage, estimated savings, source count, vault path
 - **Sources table** — Per-source photo count, total size, and last scanned timestamp
-- **Files table** (`catalog list`) — Every file with its source name, format, size, group ID, role (Best Copy / Duplicate / Unique), and vault eligibility (checkmark)
+- **Files table** (`status --files`) — Every file with its source name, format, size, group ID, role (Best Copy / Duplicate / Unique), and vault eligibility (checkmark)
 
 Files are sorted by group (source-of-truth first within each group), then ungrouped files by path. Blank separator rows visually separate groups.
 
 ### Vault (Lossless Archive)
 
-`photopack vault sync` syncs a clean, deduplicated photo library to the configured vault directory. The vault is a permanent lossless archive — even if you remove sources later, the vault keeps your best originals:
+`photopack pack` syncs a clean, deduplicated photo library to the configured vault directory. The vault is a permanent lossless archive — even if you remove sources later, the vault keeps your best originals:
 
 - **Deduplication** — For each duplicate group, only the source-of-truth is synced. Ungrouped photos are synced as-is.
 - **Quality upgrade** — When a higher-quality version is found in sources (e.g., RAW replaces JPEG as SOT), vault sync copies the better version and removes the superseded lower-quality file.
 - **Date-based organization** — Photos are organized into `YYYY/MM/DD/` folders based on EXIF capture date, with modification time as fallback.
 - **Collision handling** — When multiple photos share the same date and filename, a suffix (`_1`, `_2`, ...) is appended.
-- **Incremental** — Re-running `vault sync` skips files that already exist in the vault with the same size.
+- **Incremental** — Re-running `pack` skips files that already exist in the vault with the same size.
 - **Vault path persistence** — The destination is stored in the SQLite catalog and persists across sessions.
 
 ### HEIC Export (macOS)
 
-`photopack export` converts deduplicated photos to high-quality HEIC files, mimicking macOS iCloud Photo's export behavior. Export reads from the catalog (source directories), independent from the vault:
+`photopack pack --heic` converts deduplicated photos to high-quality HEIC files, mimicking macOS iCloud Photo's export behavior. Export reads from the catalog (source directories), independent from the vault:
 
 - **Full resolution** — Photos are converted at full width using macOS's native `sips` tool
 - **Quality control** — Default quality 85 (0-100 range via `--quality` flag)
@@ -192,11 +188,10 @@ photopack/
 │       └── src/
 │           ├── main.rs         # clap CLI definition
 │           └── commands/       # Subcommand handlers
-│               ├── sources.rs  # Add, rm, scan, list sources (progress bar via indicatif)
+│               ├── sources.rs  # Add, rm, scan sources (progress bar via indicatif)
 │               ├── status.rs   # Catalog dashboard with tables (comfy-table)
 │               ├── duplicates.rs # List/detail duplicate groups
-│               ├── vault.rs    # Vault set/sync commands
-│               └── export.rs   # HEIC export set/show/run commands
+│               └── pack.rs     # Unified pack: vault sync + HEIC export
 └── tests/
     └── fixtures/               # Test photo fixtures
 ```
