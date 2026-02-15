@@ -50,8 +50,8 @@ enum Commands {
     },
     /// Export compressed HEIC photos for space savings (macOS)
     Export {
-        /// Destination directory (saved for future runs)
-        path: Option<PathBuf>,
+        /// Destination directory
+        path: PathBuf,
         /// HEIC quality 0-100
         #[arg(long, default_value_t = 85)]
         quality: u8,
@@ -81,7 +81,7 @@ fn main() -> Result<()> {
         Commands::Status { files } => commands::status::run(&vault, files)?,
         Commands::Dupes { id } => commands::duplicates::run(&vault, id)?,
         Commands::Pack { path } => commands::pack::run(&mut vault, path)?,
-        Commands::Export { path, quality } => commands::export::run(&mut vault, path, quality)?,
+        Commands::Export { path, quality } => commands::export::run(&mut vault, &path, quality)?,
     }
 
     Ok(())

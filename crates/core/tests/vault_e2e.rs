@@ -2911,74 +2911,6 @@ fn test_vault_sync_cleanup_reports_removed_count() {
 
 // ── Export (HEIC conversion) tests ──────────────────────────────
 
-#[test]
-fn test_export_set_and_get_path() {
-    let tmp = tempfile::tempdir().unwrap();
-    let export_dir = tmp.path().join("export");
-    fs::create_dir_all(&export_dir).unwrap();
-
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
-
-    // Initially unset
-    assert!(vault.get_export_path().unwrap().is_none());
-
-    // Set and verify
-    vault.set_export_path(&export_dir).unwrap();
-    let retrieved = vault.get_export_path().unwrap().unwrap();
-    assert_eq!(retrieved, export_dir.canonicalize().unwrap());
-}
-
-#[test]
-fn test_export_set_overwrite_path() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir1 = tmp.path().join("export1");
-    let dir2 = tmp.path().join("export2");
-    fs::create_dir_all(&dir1).unwrap();
-    fs::create_dir_all(&dir2).unwrap();
-
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
-    vault.set_export_path(&dir1).unwrap();
-    vault.set_export_path(&dir2).unwrap();
-
-    let retrieved = vault.get_export_path().unwrap().unwrap();
-    assert_eq!(retrieved, dir2.canonicalize().unwrap());
-}
-
-#[test]
-fn test_export_set_nonexistent_path_errors() {
-    let tmp = tempfile::tempdir().unwrap();
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
-
-    let err = vault
-        .set_export_path(Path::new("/nonexistent/export/path"))
-        .unwrap_err();
-    assert!(err.to_string().contains("does not exist"));
-}
-
-#[test]
-fn test_export_path_not_set_errors() {
-    let tmp = tempfile::tempdir().unwrap();
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
-
-    let err = vault.export(85, None).unwrap_err();
-    // On macOS this hits SipsNotAvailable or ExportPathNotSet depending on order
-    // On non-macOS it hits SipsNotAvailable first
-    assert!(
-        err.to_string().contains("export path not configured")
-            || err.to_string().contains("sips")
-    );
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn test_export_path_not_set_errors_macos() {
-    let tmp = tempfile::tempdir().unwrap();
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
-
-    let err = vault.export(85, None).unwrap_err();
-    assert!(err.to_string().contains("export path not configured"));
-}
-
 #[cfg(target_os = "macos")]
 #[test]
 fn test_export_converts_jpeg_to_heic() {
@@ -2993,8 +2925,7 @@ fn test_export_converts_jpeg_to_heic() {
     let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
-    vault.set_export_path(&export_dir).unwrap();
-    vault.export(85, None).unwrap();
+    vault.export(&export_dir, 85, None).unwrap();
 
     let exported: Vec<_> = walkdir::WalkDir::new(&export_dir)
         .into_iter()
@@ -3034,8 +2965,7 @@ fn test_export_deduplicates_groups() {
     let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
-    vault.set_export_path(&export_dir).unwrap();
-    vault.export(85, None).unwrap();
+    vault.export(&export_dir, 85, None).unwrap();
 
     // 1 SOT from group + 1 unique = 2 HEIC files
     assert_eq!(count_files_recursive(&export_dir), 2);
@@ -3055,13 +2985,11 @@ fn test_export_skips_existing() {
     let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
-    vault.set_export_path(&export_dir).unwrap();
-
     // First export
     use photopack_core::export::ExportProgress;
     let mut first_converted = 0;
     vault
-        .export(
+        .export(&export_dir,
             85,
             Some(&mut |progress| {
                 if let ExportProgress::Complete { converted, .. } = progress {
@@ -3076,6 +3004,7 @@ fn test_export_skips_existing() {
     let mut second_skipped = 0;
     vault
         .export(
+            &export_dir,
             85,
             Some(&mut |progress| {
                 if let ExportProgress::Complete { skipped, .. } = progress {
@@ -3101,8 +3030,7 @@ fn test_export_date_organization() {
     let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
-    vault.set_export_path(&export_dir).unwrap();
-    vault.export(85, None).unwrap();
+    vault.export(&export_dir, 85, None).unwrap();
 
     let exported: Vec<_> = walkdir::WalkDir::new(&export_dir)
         .into_iter()
@@ -3137,12 +3065,11 @@ fn test_export_progress_events_order() {
     let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
-    vault.set_export_path(&export_dir).unwrap();
-
     use photopack_core::export::ExportProgress;
     let mut events = Vec::new();
     vault
         .export(
+            &export_dir,
             85,
             Some(&mut |progress| match progress {
                 ExportProgress::Start { total } => events.push(format!("start:{total}")),
@@ -3163,18 +3090,12 @@ fn test_export_progress_events_order() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn test_export_deleted_export_path_errors() {
+fn test_export_nonexistent_path_errors() {
     let tmp = tempfile::tempdir().unwrap();
-    let export_dir = tmp.path().join("export");
-    fs::create_dir_all(&export_dir).unwrap();
+    let export_dir = tmp.path().join("nonexistent_export");
 
     let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
-    vault.set_export_path(&export_dir).unwrap();
-
-    // Delete the export directory after setting it
-    fs::remove_dir_all(&export_dir).unwrap();
-
-    let err = vault.export(85, None).unwrap_err();
+    let err = vault.export(&export_dir, 85, None).unwrap_err();
     assert!(err.to_string().contains("does not exist"));
 }
 
@@ -3192,8 +3113,7 @@ fn test_export_converts_png_to_heic() {
     let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
-    vault.set_export_path(&export_dir).unwrap();
-    vault.export(85, None).unwrap();
+    vault.export(&export_dir, 85, None).unwrap();
 
     let exported: Vec<_> = walkdir::WalkDir::new(&export_dir)
         .into_iter()
@@ -3225,8 +3145,7 @@ fn test_export_multiple_photos_all_heic_extension() {
     let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
-    vault.set_export_path(&export_dir).unwrap();
-    vault.export(85, None).unwrap();
+    vault.export(&export_dir, 85, None).unwrap();
 
     let exported: Vec<_> = walkdir::WalkDir::new(&export_dir)
         .into_iter()
@@ -3263,8 +3182,7 @@ fn test_export_multiple_sources() {
     vault.add_source(&source_a).unwrap();
     vault.add_source(&source_b).unwrap();
     vault.scan(None).unwrap();
-    vault.set_export_path(&export_dir).unwrap();
-    vault.export(85, None).unwrap();
+    vault.export(&export_dir, 85, None).unwrap();
 
     assert_eq!(count_files_recursive(&export_dir), 2);
 }
@@ -3285,8 +3203,7 @@ fn test_export_nested_source_photos() {
     let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&source).unwrap();
     vault.scan(None).unwrap();
-    vault.set_export_path(&export_dir).unwrap();
-    vault.export(85, None).unwrap();
+    vault.export(&export_dir, 85, None).unwrap();
 
     assert_eq!(count_files_recursive(&export_dir), 2);
 }
@@ -3299,13 +3216,13 @@ fn test_export_empty_catalog_succeeds() {
     fs::create_dir_all(&export_dir).unwrap();
 
     let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
-    vault.set_export_path(&export_dir).unwrap();
 
     use photopack_core::export::ExportProgress;
     let mut total = 999;
     let mut converted = 999;
     vault
         .export(
+            &export_dir,
             85,
             Some(&mut |progress| match progress {
                 ExportProgress::Start { total: t } => total = t,
@@ -3348,8 +3265,7 @@ fn test_export_all_grouped_only_sots_exported() {
     assert_eq!(vault.status().unwrap().total_photos, 4);
     assert_eq!(vault.status().unwrap().total_groups, 2);
 
-    vault.set_export_path(&export_dir).unwrap();
-    vault.export(85, None).unwrap();
+    vault.export(&export_dir, 85, None).unwrap();
 
     // Only 2 SOTs exported, not 4
     assert_eq!(count_files_recursive(&export_dir), 2);
@@ -3369,8 +3285,7 @@ fn test_export_after_rescan_includes_new_photos() {
     let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
-    vault.set_export_path(&export_dir).unwrap();
-    vault.export(85, None).unwrap();
+    vault.export(&export_dir, 85, None).unwrap();
 
     assert_eq!(count_files_recursive(&export_dir), 1);
 
@@ -3383,6 +3298,7 @@ fn test_export_after_rescan_includes_new_photos() {
     let mut skipped = 0;
     vault
         .export(
+            &export_dir,
             85,
             Some(&mut |progress| {
                 if let ExportProgress::Complete {
@@ -3420,13 +3336,12 @@ fn test_export_independent_from_vault_save() {
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
 
-    // Set both paths
+    // Set vault path
     vault.set_vault_path(&vault_dir).unwrap();
-    vault.set_export_path(&export_dir).unwrap();
 
     // Both operations work independently
     vault.vault_save(None).unwrap();
-    vault.export(85, None).unwrap();
+    vault.export(&export_dir, 85, None).unwrap();
 
     // Pack has content-addressed .jpg, export has .heic
     let pack_files = list_pack_files(&vault_dir);
@@ -3456,8 +3371,7 @@ fn test_export_heic_file_is_nonempty() {
     let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
-    vault.set_export_path(&export_dir).unwrap();
-    vault.export(85, None).unwrap();
+    vault.export(&export_dir, 85, None).unwrap();
 
     let exported: Vec<_> = walkdir::WalkDir::new(&export_dir)
         .into_iter()
@@ -3491,8 +3405,7 @@ fn test_export_cross_source_dedup() {
 
     assert_eq!(vault.status().unwrap().total_groups, 1);
 
-    vault.set_export_path(&export_dir).unwrap();
-    vault.export(85, None).unwrap();
+    vault.export(&export_dir, 85, None).unwrap();
 
     // Only 1 SOT exported, not 2
     assert_eq!(count_files_recursive(&export_dir), 1);
@@ -3512,13 +3425,12 @@ fn test_export_converted_event_has_correct_paths() {
     let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
     vault.add_source(&photos_dir).unwrap();
     vault.scan(None).unwrap();
-    vault.set_export_path(&export_dir).unwrap();
-
     use photopack_core::export::ExportProgress;
     let mut source_path = PathBuf::new();
     let mut target_path = PathBuf::new();
     vault
         .export(
+            &export_dir,
             85,
             Some(&mut |progress| {
                 if let ExportProgress::Converted { source, target } = progress {
@@ -3536,42 +3448,12 @@ fn test_export_converted_event_has_correct_paths() {
         source_path.display()
     );
     // Target should be in the export dir with .heic extension
-    let canonical_export = export_dir.canonicalize().unwrap();
     assert!(
-        target_path.starts_with(&canonical_export),
+        target_path.starts_with(&export_dir),
         "target should be in export dir: {}",
         target_path.display()
     );
     assert_eq!(target_path.extension().unwrap(), "heic");
-}
-
-#[test]
-fn test_export_set_file_not_directory_errors() {
-    let tmp = tempfile::tempdir().unwrap();
-    let file_path = tmp.path().join("not_a_dir.txt");
-    fs::write(&file_path, b"i am a file").unwrap();
-
-    let vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
-    let err = vault.set_export_path(&file_path).unwrap_err();
-    assert!(err.to_string().contains("does not exist"));
-}
-
-#[test]
-fn test_export_path_persists_across_reopen() {
-    let tmp = tempfile::tempdir().unwrap();
-    let export_dir = tmp.path().join("export");
-    fs::create_dir_all(&export_dir).unwrap();
-    let db_path = tmp.path().join("catalog.db");
-
-    {
-        let vault = Vault::open(&db_path).unwrap();
-        vault.set_export_path(&export_dir).unwrap();
-    }
-
-    // Reopen vault and verify path persisted
-    let vault = Vault::open(&db_path).unwrap();
-    let retrieved = vault.get_export_path().unwrap().unwrap();
-    assert_eq!(retrieved, export_dir.canonicalize().unwrap());
 }
 
 #[cfg(target_os = "macos")]
@@ -3603,8 +3485,7 @@ fn test_export_multiple_groups_correct_count() {
     assert_eq!(vault.status().unwrap().total_photos, 7);
     assert_eq!(vault.status().unwrap().total_groups, 2);
 
-    vault.set_export_path(&export_dir).unwrap();
-    vault.export(85, None).unwrap();
+    vault.export(&export_dir, 85, None).unwrap();
 
     // 1 SOT from group1 + 1 SOT from group2 + 2 unique = 4
     assert_eq!(count_files_recursive(&export_dir), 4);

@@ -50,8 +50,7 @@ photopack export ~/PhotosPacked --quality 85
 | `photopack dupes <id>` | Show group detail with source-of-truth marker |
 | `photopack pack <path>` | Set vault path and sync best-quality originals (lossless) |
 | `photopack pack` | Re-sync using saved vault path |
-| `photopack export <path>` | Set export path and convert to compressed HEIC (macOS) |
-| `photopack export [--quality 85]` | Re-export using saved path with quality control |
+| `photopack export <path> [--quality 85]` | Convert deduplicated photos to compressed HEIC (macOS) |
 
 The catalog defaults to `~/.photopack/catalog.db`. Override with `--catalog <path>`.
 
@@ -184,7 +183,7 @@ photopack/
 │   │   │   ├── manifest.rs     # Embedded manifest (SQLite, hash→metadata)
 │   │   │   └── export.rs       # HEIC export via macOS sips
 │   │   └── tests/
-│   │       └── vault_e2e.rs    # 129 end-to-end integration tests
+│   │       └── vault_e2e.rs    # 122 end-to-end integration tests
 │   └── cli/                    # Binary crate (photopack)
 │       └── src/
 │           ├── main.rs         # clap CLI definition
@@ -220,7 +219,7 @@ photopack/
 ## Development
 
 ```bash
-# Run all tests (375 total)
+# Run all tests (368 total)
 cargo test --workspace
 
 # Lint

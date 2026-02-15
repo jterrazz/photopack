@@ -1,16 +1,10 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
 use photopack_core::{export::ExportProgress, Vault};
 
-pub fn run(vault: &mut Vault, path: Option<PathBuf>, quality: u8) -> Result<()> {
-    if let Some(path) = path {
-        vault.set_export_path(&path)?;
-        let resolved = vault.get_export_path()?.unwrap();
-        println!("Export path set to: {}", resolved.display());
-    }
-
+pub fn run(vault: &mut Vault, path: &Path, quality: u8) -> Result<()> {
     let pb = ProgressBar::new(0);
     pb.set_style(
         ProgressStyle::with_template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
@@ -19,6 +13,7 @@ pub fn run(vault: &mut Vault, path: Option<PathBuf>, quality: u8) -> Result<()> 
     );
 
     vault.export(
+        path,
         quality,
         Some(&mut |progress| match progress {
             ExportProgress::Start { total } => {

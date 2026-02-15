@@ -497,42 +497,20 @@ impl Vault {
         Ok(())
     }
 
-    /// Set the export destination path.
-    pub fn set_export_path(&self, path: &Path) -> Result<()> {
-        let canonical = path
-            .canonicalize()
-            .map_err(|_| Error::ExportPathNotFound(path.to_path_buf()))?;
-        if !canonical.is_dir() {
-            return Err(Error::ExportPathNotFound(path.to_path_buf()));
-        }
-        self.catalog
-            .set_config("export_path", &canonical.to_string_lossy())
-    }
-
-    /// Get the current export destination path, if set.
-    pub fn get_export_path(&self) -> Result<Option<PathBuf>> {
-        Ok(self.catalog.get_config("export_path")?.map(PathBuf::from))
-    }
-
     /// Export deduplicated photos as HEIC files.
     /// For each duplicate group, only the source-of-truth is exported.
     /// Ungrouped photos are exported as-is.
     /// Photos are organized into YYYY/MM/DD folders and converted to HEIC.
     pub fn export(
         &self,
+        export_path: &Path,
         quality: u8,
         mut progress_cb: Option<&mut dyn FnMut(export::ExportProgress)>,
     ) -> Result<()> {
         export::check_sips_available()?;
 
-        let export_path = self
-            .catalog
-            .get_config("export_path")?
-            .map(PathBuf::from)
-            .ok_or(Error::ExportPathNotSet)?;
-
         if !export_path.is_dir() {
-            return Err(Error::ExportPathNotFound(export_path));
+            return Err(Error::ExportPathNotFound(export_path.to_path_buf()));
         }
 
         let all_photos = self.catalog.list_all_photos()?;
@@ -550,7 +528,7 @@ impl Vault {
             .iter()
             .map(|photo| {
                 let date = vault_save::date_for_photo(photo);
-                let target = export::build_export_path(&export_path, date, &photo.path);
+                let target = export::build_export_path(export_path, date, &photo.path);
                 (*photo, target)
             })
             .collect();
