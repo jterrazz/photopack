@@ -9,7 +9,7 @@ pub mod ranking;
 pub mod scanner;
 pub mod vault_save;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
@@ -28,6 +28,8 @@ pub enum ScanProgress {
     AnalysisStart { count: usize },
     /// A perceptual hash has been computed for one image.
     AnalysisDone { path: PathBuf },
+    /// Stale catalog entries removed (files deleted from disk).
+    FilesRemoved { count: usize },
     /// Scan phase completed.
     PhaseComplete { phase: String },
 }
@@ -98,6 +100,21 @@ impl Vault {
                     }
                 } else {
                     files_to_process.push(sf);
+                }
+            }
+
+            // ── Remove stale entries (deleted from disk but still in catalog)
+            let scanned_paths: HashSet<&PathBuf> =
+                scanned_files.iter().map(|sf| &sf.path).collect();
+            let stale_paths: Vec<&Path> = known_mtimes
+                .keys()
+                .filter(|path| !scanned_paths.contains(path))
+                .map(|p| p.as_path())
+                .collect();
+            if !stale_paths.is_empty() {
+                let count = self.catalog.remove_photos_by_paths(&stale_paths)?;
+                if let Some(ref mut cb) = progress_cb {
+                    cb(ScanProgress::FilesRemoved { count });
                 }
             }
 

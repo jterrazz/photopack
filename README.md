@@ -75,7 +75,7 @@ The catalog defaults to `~/.losslessvault/catalog.db`. Override with `--catalog 
 
 Two 64-bit hashes are computed per image: **aHash** (average/mean, stored as `phash`) and **dHash** (gradient). Both must agree within threshold for a match (**dual-hash consensus**), dramatically reducing false positives. Supported formats: **JPEG, PNG, TIFF, WebP**. HEIC and RAW skip perceptual hashing (SHA-256 and EXIF only).
 
-The hasher uses `img_hash` v3 (internally `image` v0.23) with a fallback to `image` v0.25 for broader format coverage.
+The hasher uses a hybrid decode pipeline: **`turbojpeg`** (libjpeg-turbo, ~2-3x faster JPEG decode) for JPEG, falling back to the `image` crate for other formats. Both paths resize to 9x8 grayscale via **`fast_image_resize`** (SIMD-accelerated: SSE4.1, AVX2, NEON), then compute aHash + dHash manually from the same buffer. The `turbojpeg` feature is optional (`--no-default-features` for pure-Rust/WASM builds).
 
 ### Source-of-Truth Election
 
@@ -87,7 +87,7 @@ Each duplicate group elects a best copy using:
 
 ### Incremental Scanning
 
-Rescanning skips files whose modification time (mtime) hasn't changed since the last scan. New or modified files are hashed and inserted; duplicate groups are rebuilt from scratch each scan.
+Rescanning skips files whose modification time (mtime) hasn't changed since the last scan. New or modified files are hashed and inserted; files deleted from disk are automatically removed from the catalog. Duplicate groups are rebuilt from scratch each scan.
 
 ### Two-Phase Hashing (Performance)
 
@@ -95,7 +95,7 @@ Scanning uses a two-phase approach to minimize expensive image decoding:
 
 1. **Phase 1 (fast)** — SHA-256 + EXIF extraction for all new files in parallel (I/O-bound, ~10-50ms/file)
 2. **SHA-256 dedup** — Groups results by hash. For exact duplicates, only one representative needs perceptual hashing. Existing catalog hashes are reused.
-3. **Phase 2 (expensive)** — Perceptual hashing only for unique content in parallel (CPU-bound, ~500ms-2s/file)
+3. **Phase 2 (optimized)** — Perceptual hashing only for unique content in parallel. JPEG uses `turbojpeg` (~2-3x faster decode); all formats use SIMD resize via `fast_image_resize`
 
 If 4 copies of the same photo exist, only 1 image is decoded instead of 4. Re-scanning with a new exact duplicate reuses the catalog's perceptual hash (zero decodes).
 
@@ -159,7 +159,7 @@ lossless-vault/
 │   │   │   │   └── formats.rs  # Extension -> PhotoFormat mapping
 │   │   │   ├── hasher/         # File hashing
 │   │   │   │   ├── mod.rs      # SHA-256 (sha2)
-│   │   │   │   └── perceptual.rs # pHash/dHash (img_hash + image fallback)
+│   │   │   │   └── perceptual.rs # aHash/dHash (turbojpeg + fast_image_resize)
 │   │   │   ├── exif.rs         # EXIF extraction (kamadak-exif)
 │   │   │   ├── matching/       # 4-phase duplicate matching pipeline
 │   │   │   │   ├── mod.rs      # Pipeline orchestration + group merge
@@ -168,7 +168,7 @@ lossless-vault/
 │   │   │   ├── vault_save.rs   # Vault sync logic (date org, dedup, parallel copy)
 │   │   │   └── export.rs       # HEIC export via macOS sips
 │   │   └── tests/
-│   │       └── vault_e2e.rs    # 112 end-to-end integration tests
+│   │       └── vault_e2e.rs    # 118 end-to-end integration tests
 │   └── cli/                    # Binary crate (lsvault)
 │       └── src/
 │           ├── main.rs         # clap CLI definition
@@ -188,8 +188,9 @@ lossless-vault/
 |-------|---------|
 | `rusqlite` (bundled) | SQLite catalog with WAL mode |
 | `sha2` | SHA-256 file hashing |
-| `img_hash` 3 | Perceptual hashing (pHash, dHash) |
-| `image` 0.25 | Image decoding fallback for perceptual hashing |
+| `turbojpeg` 1.4 | Fast JPEG decoding via libjpeg-turbo (optional, default feature) |
+| `fast_image_resize` 6 | SIMD-accelerated image resize (SSE4.1, AVX2, NEON) |
+| `image` 0.25 | Image decoding for PNG, TIFF, WebP (and JPEG fallback) |
 | `kamadak-exif` | EXIF metadata extraction |
 | `sha2-asm` | Hardware-accelerated SHA-256 (ARM Crypto Extensions) |
 | `rayon` | Parallel file hashing, copying, and HEIC conversion |
@@ -203,7 +204,7 @@ lossless-vault/
 ## Development
 
 ```bash
-# Run all tests (167 unit + 112 e2e)
+# Run all tests (167 unit + 118 e2e)
 cargo test --workspace
 
 # Lint
@@ -220,9 +221,9 @@ The test suite covers:
 - **Vault sync** (23 tests) — Date parsing, EXIF/mtime fallback, photo selection, collision handling, incremental copy, quality upgrade cleanup
 - **Export** (21 tests) — build_export_path (all format extensions, collision, skip, no-extension), export_photo_to_heic (skip/convert), convert_to_heic (parent dirs, invalid source, output validation, quality effect), sips availability
 - **Domain** (5 tests) — Quality tiers, format support, confidence ordering
-- **Perceptual hash** (8 tests) — Hamming distance, real JPEG/PNG hashing
+- **Perceptual hash** (9 tests) — Hamming distance, manual aHash/dHash, real JPEG/PNG hashing
 - **EXIF** (5 tests) — Edge cases, missing data
 - **SHA-256** (4 tests) — Consistency, empty files, error handling
 - **Scanner** (11 tests) — Directory walk, format filtering, nested directories (deep nesting, multiple levels, siblings, symlinks)
 - **Ranking** (3 tests) — Format preference, size tiebreak, mtime tiebreak
-- **E2E** (112 tests) — Full vault lifecycle, cross-directory and cross-format duplicates, incremental scan, source-of-truth election, source removal (with group cleanup), vault auto-registration as source, photos API, quality preservation (all format tier combinations, RAW > HEIC > JPEG, vault as source), nested directories (multi-level, cross-source, incremental), vault sync (deduplication, date structure, incremental skip, quality upgrade with superseded file cleanup, progress events, error cases, file integrity), HEIC export (JPEG/PNG conversion, multi-source, nested dirs, dedup, cross-source dedup, incremental skip+rescan, independent from vault sync, progress events, config persistence, error handling, file validity)
+- **E2E** (118 tests) — Full vault lifecycle, cross-directory and cross-format duplicates, incremental scan, source-of-truth election, source removal (with group cleanup), vault auto-registration as source, photos API, quality preservation (all format tier combinations, RAW > HEIC > JPEG, vault as source), nested directories (multi-level, cross-source, incremental), vault sync (deduplication, date structure, incremental skip, quality upgrade with superseded file cleanup, progress events, error cases, file integrity), HEIC export (JPEG/PNG conversion, multi-source, nested dirs, dedup, cross-source dedup, incremental skip+rescan, independent from vault sync, progress events, config persistence, error handling, file validity)

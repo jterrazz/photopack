@@ -453,6 +453,9 @@ fn test_scan_with_progress_callback() {
                 losslessvault_core::ScanProgress::AnalysisDone { .. } => {
                     events.push("analysis_done".to_string());
                 }
+                losslessvault_core::ScanProgress::FilesRemoved { count } => {
+                    events.push(format!("removed:{count}"));
+                }
                 losslessvault_core::ScanProgress::PhaseComplete { phase } => {
                     events.push(format!("phase:{phase}"));
                 }
@@ -550,6 +553,167 @@ fn test_three_way_exact_duplicate() {
 
     let group = &vault.groups().unwrap()[0];
     assert_eq!(group.members.len(), 3);
+}
+
+// ── Stale file cleanup during scan ──────────────────────────────
+
+/// Deleting a file from disk and rescanning should remove it from the catalog.
+#[test]
+fn test_scan_removes_deleted_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let photos = tmp.path().join("photos");
+    fs::create_dir_all(&photos).unwrap();
+
+    create_jpeg(&photos.join("keep.jpg"), 10, 20, 30);
+    create_jpeg(&photos.join("delete_me.jpg"), 40, 50, 60);
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&photos).unwrap();
+    vault.scan(None).unwrap();
+    assert_eq!(vault.status().unwrap().total_photos, 2);
+
+    // Delete one file and rescan
+    fs::remove_file(photos.join("delete_me.jpg")).unwrap();
+    vault.scan(None).unwrap();
+
+    assert_eq!(vault.status().unwrap().total_photos, 1);
+}
+
+/// Deleting all files from a source should leave the catalog empty (for that source).
+#[test]
+fn test_scan_removes_all_deleted_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let photos = tmp.path().join("photos");
+    fs::create_dir_all(&photos).unwrap();
+
+    create_jpeg(&photos.join("a.jpg"), 10, 20, 30);
+    create_jpeg(&photos.join("b.jpg"), 40, 50, 60);
+    create_jpeg(&photos.join("c.jpg"), 70, 80, 90);
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&photos).unwrap();
+    vault.scan(None).unwrap();
+    assert_eq!(vault.status().unwrap().total_photos, 3);
+
+    // Delete all files and rescan
+    fs::remove_file(photos.join("a.jpg")).unwrap();
+    fs::remove_file(photos.join("b.jpg")).unwrap();
+    fs::remove_file(photos.join("c.jpg")).unwrap();
+    vault.scan(None).unwrap();
+
+    let stats = vault.status().unwrap();
+    assert_eq!(stats.total_photos, 0);
+    assert_eq!(stats.total_groups, 0);
+}
+
+/// Deleting one file from a duplicate pair should dissolve the group.
+#[test]
+fn test_scan_removes_deleted_file_from_group() {
+    let tmp = tempfile::tempdir().unwrap();
+    let photos = tmp.path().join("photos");
+    fs::create_dir_all(&photos).unwrap();
+
+    create_jpeg(&photos.join("original.jpg"), 10, 20, 30);
+    copy_file(&photos.join("original.jpg"), &photos.join("duplicate.jpg"));
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&photos).unwrap();
+    vault.scan(None).unwrap();
+
+    assert_eq!(vault.status().unwrap().total_photos, 2);
+    assert_eq!(vault.status().unwrap().total_groups, 1);
+
+    // Delete the duplicate and rescan
+    fs::remove_file(photos.join("duplicate.jpg")).unwrap();
+    vault.scan(None).unwrap();
+
+    assert_eq!(vault.status().unwrap().total_photos, 1);
+    assert_eq!(vault.status().unwrap().total_groups, 0, "no group with single file");
+}
+
+/// Deleting from one source while other source retains its copy — cross-source stale cleanup.
+#[test]
+fn test_scan_removes_stale_cross_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src_a = tmp.path().join("source_a");
+    let src_b = tmp.path().join("source_b");
+    fs::create_dir_all(&src_a).unwrap();
+    fs::create_dir_all(&src_b).unwrap();
+
+    create_jpeg(&src_a.join("photo.jpg"), 10, 20, 30);
+    copy_file(&src_a.join("photo.jpg"), &src_b.join("photo.jpg"));
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&src_a).unwrap();
+    vault.add_source(&src_b).unwrap();
+    vault.scan(None).unwrap();
+
+    assert_eq!(vault.status().unwrap().total_photos, 2);
+    assert_eq!(vault.status().unwrap().total_groups, 1);
+
+    // Delete from source A, rescan
+    fs::remove_file(src_a.join("photo.jpg")).unwrap();
+    vault.scan(None).unwrap();
+
+    assert_eq!(vault.status().unwrap().total_photos, 1);
+    assert_eq!(vault.status().unwrap().total_groups, 0, "single copy, no group");
+}
+
+/// Rescanning with all files intact should not remove anything.
+#[test]
+fn test_scan_preserves_existing_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let photos = tmp.path().join("photos");
+    fs::create_dir_all(&photos).unwrap();
+
+    create_jpeg(&photos.join("a.jpg"), 10, 20, 30);
+    create_jpeg(&photos.join("b.jpg"), 40, 50, 60);
+    create_jpeg(&photos.join("c.jpg"), 70, 80, 90);
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&photos).unwrap();
+    vault.scan(None).unwrap();
+    assert_eq!(vault.status().unwrap().total_photos, 3);
+
+    // Rescan without deleting anything
+    vault.scan(None).unwrap();
+    assert_eq!(vault.status().unwrap().total_photos, 3);
+
+    // Rescan again
+    vault.scan(None).unwrap();
+    assert_eq!(vault.status().unwrap().total_photos, 3);
+}
+
+/// Deleting one file and adding a new one in the same scan cycle.
+#[test]
+fn test_scan_removes_deleted_and_picks_up_new() {
+    let tmp = tempfile::tempdir().unwrap();
+    let photos = tmp.path().join("photos");
+    fs::create_dir_all(&photos).unwrap();
+
+    create_jpeg(&photos.join("keep.jpg"), 10, 20, 30);
+    create_jpeg(&photos.join("delete_me.jpg"), 40, 50, 60);
+
+    let mut vault = Vault::open(&tmp.path().join("catalog.db")).unwrap();
+    vault.add_source(&photos).unwrap();
+    vault.scan(None).unwrap();
+    assert_eq!(vault.status().unwrap().total_photos, 2);
+
+    // Delete one, add a new one
+    fs::remove_file(photos.join("delete_me.jpg")).unwrap();
+    create_jpeg(&photos.join("new_photo.jpg"), 70, 80, 90);
+    vault.scan(None).unwrap();
+
+    assert_eq!(vault.status().unwrap().total_photos, 2);
+    // Verify the right files are present
+    let photos_list = vault.photos().unwrap();
+    let names: Vec<String> = photos_list
+        .iter()
+        .map(|p| p.path.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    assert!(names.contains(&"keep.jpg".to_string()));
+    assert!(names.contains(&"new_photo.jpg".to_string()));
+    assert!(!names.contains(&"delete_me.jpg".to_string()));
 }
 
 // ── Nested directories ───────────────────────────────────────────

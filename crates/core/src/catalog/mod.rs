@@ -158,6 +158,67 @@ impl Catalog {
         Ok((source, photo_count as usize))
     }
 
+    /// Remove specific photos by path. Cleans up group_members to avoid FK violations.
+    /// Returns the number of photos removed.
+    pub fn remove_photos_by_paths(&self, paths: &[&Path]) -> Result<usize> {
+        if paths.is_empty() {
+            return Ok(0);
+        }
+
+        let path_strs: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        let mut total_removed = 0usize;
+
+        // Process in chunks to respect SQLite variable limits
+        for chunk in path_strs.chunks(500) {
+            let placeholders: String = chunk.iter().enumerate()
+                .map(|(i, _)| format!("?{}", i + 1))
+                .collect::<Vec<_>>()
+                .join(",");
+
+            let params: Vec<&dyn rusqlite::types::ToSql> = chunk
+                .iter()
+                .map(|s| s as &dyn rusqlite::types::ToSql)
+                .collect();
+
+            // Delete group_members for these photos
+            self.conn.execute(
+                &format!(
+                    "DELETE FROM group_members WHERE photo_id IN (SELECT id FROM photos WHERE path IN ({placeholders}))"
+                ),
+                params.as_slice(),
+            )?;
+
+            // Delete groups whose source_of_truth is one of these photos, or now empty
+            self.conn.execute(
+                &format!(
+                    "DELETE FROM group_members WHERE group_id IN (
+                        SELECT id FROM duplicate_groups
+                        WHERE source_of_truth_id IN (SELECT id FROM photos WHERE path IN ({placeholders}))
+                           OR id NOT IN (SELECT DISTINCT group_id FROM group_members)
+                    )"
+                ),
+                params.as_slice(),
+            )?;
+            self.conn.execute(
+                &format!(
+                    "DELETE FROM duplicate_groups
+                     WHERE source_of_truth_id IN (SELECT id FROM photos WHERE path IN ({placeholders}))
+                        OR id NOT IN (SELECT DISTINCT group_id FROM group_members)"
+                ),
+                params.as_slice(),
+            )?;
+
+            // Delete the photos
+            let removed = self.conn.execute(
+                &format!("DELETE FROM photos WHERE path IN ({placeholders})"),
+                params.as_slice(),
+            )?;
+            total_removed += removed;
+        }
+
+        Ok(total_removed)
+    }
+
     // ── Photos ───────────────────────────────────────────────────────
 
     pub fn upsert_photo(&self, photo: &PhotoFile) -> Result<i64> {
