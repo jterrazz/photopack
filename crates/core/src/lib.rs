@@ -69,7 +69,20 @@ impl Vault {
     /// then perceptual hashing only for unique content (expensive, CPU-bound).
     /// Exact SHA-256 duplicates skip perceptual hashing entirely.
     /// Progress events stream in real-time via a background thread + channel.
+    /// Current perceptual hash algorithm version. Bump this whenever the hash
+    /// computation changes (decode strategy, resize, coefficients) to invalidate
+    /// cached hashes and force recomputation on next scan.
+    const PHASH_VERSION: &str = "3";
+
     pub fn scan(&mut self, mut progress_cb: Option<&mut dyn FnMut(ScanProgress)>) -> Result<()> {
+        // Invalidate cached hashes if algorithm version changed
+        let stored_version = self.catalog.get_config("phash_version")?;
+        if stored_version.as_deref() != Some(Self::PHASH_VERSION) {
+            self.catalog.clear_perceptual_hashes()?;
+            self.catalog
+                .set_config("phash_version", Self::PHASH_VERSION)?;
+        }
+
         let sources = self.catalog.list_sources()?;
         let now = chrono::Utc::now().timestamp();
 

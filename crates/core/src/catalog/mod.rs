@@ -749,6 +749,15 @@ impl Catalog {
         Ok(())
     }
 
+    /// Clear all cached perceptual hashes. Used when the hash algorithm changes.
+    pub fn clear_perceptual_hashes(&self) -> Result<usize> {
+        let count = self.conn.execute(
+            "UPDATE photos SET phash = NULL, dhash = NULL WHERE phash IS NOT NULL",
+            [],
+        )?;
+        Ok(count)
+    }
+
     pub fn get_config(&self, key: &str) -> Result<Option<String>> {
         let value = self
             .conn
