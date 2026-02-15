@@ -214,4 +214,62 @@ mod tests {
         let entries = manifest.list_entries().unwrap();
         assert_eq!(entries.len(), 1);
     }
+
+    // ── Schema safety ───────────────────────────────────────────
+
+    #[test]
+    fn test_manifest_tables_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = Manifest::open(tmp.path()).unwrap();
+        let mut stmt = manifest
+            .conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+            .unwrap();
+        let tables: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(tables, vec!["metadata", "pack_files"]);
+    }
+
+    #[test]
+    fn test_manifest_pack_files_columns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = Manifest::open(tmp.path()).unwrap();
+        let mut stmt = manifest
+            .conn
+            .prepare("SELECT name FROM pragma_table_info('pack_files') ORDER BY cid")
+            .unwrap();
+        let columns: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            columns,
+            vec![
+                "sha256", "original_filename", "format", "size",
+                "exif_date", "camera_make", "camera_model", "added_at",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_manifest_data_survives_reopen() {
+        let tmp = tempfile::tempdir().unwrap();
+        {
+            let manifest = Manifest::open(tmp.path()).unwrap();
+            manifest
+                .insert_file("abc123", "photo.jpg", "JPEG", 1024, None, None, None)
+                .unwrap();
+        }
+        {
+            let manifest = Manifest::open(tmp.path()).unwrap();
+            assert!(manifest.contains("abc123").unwrap());
+            let entries = manifest.list_entries().unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].0, "abc123");
+        }
+    }
 }

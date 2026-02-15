@@ -23,6 +23,7 @@ impl Catalog {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         schema::initialize(&conn)?;
+        schema::migrate(&conn)?;
         Ok(Self { conn })
     }
 
@@ -31,6 +32,7 @@ impl Catalog {
         let conn = Connection::open_in_memory()?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         schema::initialize(&conn)?;
+        schema::migrate(&conn)?;
         Ok(Self { conn })
     }
 
@@ -1222,5 +1224,242 @@ mod tests {
         assert_eq!(photos[0].size, 5000);
         assert_eq!(photos[0].format, PhotoFormat::Jpeg);
         assert!(photos[0].phash.is_none());
+    }
+
+    // ── Schema version tracking ─────────────────────────────────
+
+    #[test]
+    fn test_schema_version_set_on_fresh_db() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let version = catalog.get_config("schema_version").unwrap();
+        assert_eq!(version, Some("1".to_string()));
+    }
+
+    #[test]
+    fn test_schema_version_persists_across_reopen() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("catalog.db");
+
+        {
+            let catalog = Catalog::open(&db_path).unwrap();
+            assert_eq!(catalog.get_config("schema_version").unwrap(), Some("1".to_string()));
+        }
+        {
+            let catalog = Catalog::open(&db_path).unwrap();
+            assert_eq!(catalog.get_config("schema_version").unwrap(), Some("1".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_pre_versioning_db_upgraded_to_v1() {
+        // Create a DB with schema but no schema_version key.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        schema::initialize(&conn).unwrap();
+
+        // Verify no schema_version key exists yet.
+        let v: Option<String> = conn
+            .query_row("SELECT value FROM config WHERE key = 'schema_version'", [], |r| r.get(0))
+            .ok();
+        assert!(v.is_none());
+
+        // Running migrate should set it to 1.
+        schema::migrate(&conn).unwrap();
+        let v: String = conn
+            .query_row("SELECT value FROM config WHERE key = 'schema_version'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, "1");
+    }
+
+    #[test]
+    fn test_reject_future_schema_version() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        schema::initialize(&conn).unwrap();
+
+        // Force a future version.
+        conn.execute(
+            "INSERT INTO config (key, value) VALUES ('schema_version', '999')",
+            [],
+        )
+        .unwrap();
+
+        let err = schema::migrate(&conn).unwrap_err();
+        assert!(matches!(err, Error::SchemaTooNew { db: 999, code: 1 }));
+    }
+
+    #[test]
+    fn test_migration_check_is_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        schema::initialize(&conn).unwrap();
+        schema::migrate(&conn).unwrap();
+        schema::migrate(&conn).unwrap(); // second call is a no-op
+        let v: String = conn
+            .query_row("SELECT value FROM config WHERE key = 'schema_version'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, "1");
+    }
+
+    // ── Schema structure pinning ────────────────────────────────
+
+    #[test]
+    fn test_catalog_tables_exist() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let mut stmt = catalog
+            .conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+            .unwrap();
+        let tables: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(tables, vec!["config", "duplicate_groups", "group_members", "photos", "sources"]);
+    }
+
+    #[test]
+    fn test_catalog_indexes_exist() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let mut stmt = catalog
+            .conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%' ORDER BY name")
+            .unwrap();
+        let indexes: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            indexes,
+            vec![
+                "idx_group_members_photo",
+                "idx_photos_path",
+                "idx_photos_sha256",
+                "idx_photos_source",
+                "idx_photos_source_mtime",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_photos_columns() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let mut stmt = catalog
+            .conn
+            .prepare("SELECT name FROM pragma_table_info('photos') ORDER BY cid")
+            .unwrap();
+        let columns: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            columns,
+            vec![
+                "id", "source_id", "path", "size", "format", "sha256",
+                "phash", "dhash", "mtime", "exif_date", "exif_camera_make",
+                "exif_camera_model", "exif_gps_lat", "exif_gps_lon",
+                "exif_width", "exif_height",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_schema_snapshot() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let mut stmt = catalog
+            .conn
+            .prepare(
+                "SELECT sql FROM sqlite_master
+                 WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%'
+                 ORDER BY type DESC, name",
+            )
+            .unwrap();
+        let stmts: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+
+        // Normalize whitespace for comparison stability.
+        let normalize = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        let normalized: Vec<String> = stmts.iter().map(|s| normalize(s)).collect();
+
+        // Tables (sorted alphabetically)
+        assert!(normalized.iter().any(|s| s.contains("CREATE TABLE config")));
+        assert!(normalized.iter().any(|s| s.contains("CREATE TABLE duplicate_groups")));
+        assert!(normalized.iter().any(|s| s.contains("CREATE TABLE group_members")));
+        assert!(normalized.iter().any(|s| s.contains("CREATE TABLE photos")));
+        assert!(normalized.iter().any(|s| s.contains("CREATE TABLE sources")));
+
+        // Indexes
+        assert!(normalized.iter().any(|s| s.contains("idx_photos_sha256")));
+        assert!(normalized.iter().any(|s| s.contains("idx_photos_source")));
+        assert!(normalized.iter().any(|s| s.contains("idx_photos_path")));
+        assert!(normalized.iter().any(|s| s.contains("idx_photos_source_mtime")));
+        assert!(normalized.iter().any(|s| s.contains("idx_group_members_photo")));
+    }
+
+    // ── Data integrity ──────────────────────────────────────────
+
+    #[test]
+    fn test_data_survives_close_and_reopen() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("catalog.db");
+        let source_dir = tmp.path().join("photos");
+        std::fs::create_dir_all(&source_dir).unwrap();
+
+        let source_id;
+        {
+            let catalog = Catalog::open(&db_path).unwrap();
+            let source = catalog.add_source(&source_dir).unwrap();
+            source_id = source.id;
+            let photo = make_photo(source_id, "/tmp/survive.jpg", "survive_hash");
+            catalog.upsert_photo(&photo).unwrap();
+
+            let id_a = catalog.upsert_photo(&make_photo(source_id, "/tmp/ga.jpg", "ga")).unwrap();
+            let id_b = catalog.upsert_photo(&make_photo(source_id, "/tmp/gb.jpg", "gb")).unwrap();
+            catalog.insert_group(id_a, Confidence::High, &[id_a, id_b]).unwrap();
+
+            catalog.set_config("test_key", "test_value").unwrap();
+        }
+        {
+            let catalog = Catalog::open(&db_path).unwrap();
+            let sources = catalog.list_sources().unwrap();
+            assert_eq!(sources.len(), 1);
+            assert_eq!(sources[0].id, source_id);
+
+            let photos = catalog.list_all_photos().unwrap();
+            assert_eq!(photos.len(), 3);
+
+            let groups = catalog.list_groups().unwrap();
+            assert_eq!(groups.len(), 1);
+
+            assert_eq!(catalog.get_config("test_key").unwrap(), Some("test_value".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_foreign_key_photos_requires_valid_source() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let photo = make_photo(9999, "/tmp/orphan.jpg", "orphan_hash");
+        let result = catalog.upsert_photo(&photo);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_foreign_key_group_members_requires_valid_photo() {
+        let (catalog, source, _tmp) = make_catalog_with_source();
+        let id_a = catalog.upsert_photo(&make_photo(source.id, "/tmp/a.jpg", "aaa")).unwrap();
+        let result = catalog.insert_group(id_a, Confidence::Certain, &[id_a, 9999]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_foreign_key_group_requires_valid_sot() {
+        let catalog = Catalog::open_in_memory().unwrap();
+        let result = catalog.insert_group(9999, Confidence::Certain, &[]);
+        assert!(result.is_err());
     }
 }

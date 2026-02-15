@@ -40,10 +40,11 @@ cargo clippy --workspace
 - **Incremental scan**: Files are skipped if their mtime hasn't changed. Files deleted from disk are removed from the catalog (`remove_photos_by_paths`). Groups are rebuilt from scratch each scan.
 - **HEIC export via sips**: Uses macOS `sips` command for HEIC conversion (zero dependencies). Invoked via `photopack export`, independent from lossless vault sync. Reads from catalog (source directories), not the vault. Skip by file existence (not size, since conversion changes size). `#[cfg(target_os = "macos")]` gates for e2e tests.
 - **Flat CLI structure**: All commands are top-level (`add`, `rm`, `scan`, `status`, `ls`, `pack`, `export`). `ls` = file listing (default) or duplicate groups (`--dupes`). `pack` = permanent lossless archive (best-quality originals, persists across source removal, path persisted in catalog). `export` = compressed HEIC output for space savings (path required each invocation).
+- **Schema versioning**: Catalog DB tracks `schema_version` in the config table (current: 1). On open, `schema::migrate()` runs pending migrations in a transaction. If the DB version is higher than the code version, open fails with `SchemaTooNew`. To add a migration: increment `SCHEMA_VERSION`, write a `migrate_vN_to_vM()` function, append it to the `MIGRATIONS` array. Pre-versioning databases auto-upgrade to v1.
 
 ## Testing
 
-- 368 tests total (28 CLI + 218 core + 122 e2e) — counts may vary after refactoring
+- 384 tests total (28 CLI + 234 core + 122 e2e) — counts may vary after refactoring
 - E2E tests in `crates/core/tests/vault_e2e.rs` use real JPEG/PNG generation via the `image` crate
 - Cross-format testing: use `create_file_with_jpeg_bytes()` to write JPEG bytes to `.cr2`/`.heic`/`.dng` etc. — scanner assigns format from extension, hashes work on raw bytes
 - Use structurally different patterns (gradient vs checkerboard vs stripes) in tests to ensure distinct perceptual hashes — color-only differences are not enough
@@ -59,9 +60,9 @@ Tests across 28 CLI + core library + end-to-end:
 
 - **Matching** (104 tests) — All 4 phases individually and combined. Sequential shot filter (burst detection, boundary cases, cross-format interaction, mixed with true duplicates). Dual-hash consensus (accept/reject matrix). EXIF filtering (camera model, date presence, phash validation). Cross-format grouping (HEIC/RAW without phash, HIGH threshold). BK-tree distance thresholds. Merge safeguards (cross-group visual validation, pure subsets, bridge photos). Transitive merge chains. Full pipeline scenarios (iPhone original+export+HEIC triplets, recompressed JPEGs, renamed files, 10-photo batch, sequential shots among true duplicates).
 - **CLI dashboard** (28 tests) — format_size, source_display_name, StatusData, is_duplicate, vault_eligible, compute_aggregates, compute_source_stats, sort_photos_for_display
-- **Catalog** (26 tests) — CRUD operations, format/confidence roundtrip, mtime tracking, config persistence, source removal, perceptual hash invalidation
+- **Catalog** (39 tests) — CRUD operations, format/confidence roundtrip, mtime tracking, config persistence, source removal, perceptual hash invalidation, schema versioning, schema structure pinning, data integrity (FK enforcement, reopen persistence)
 - **Vault sync** (20 tests) — Date parsing, EXIF/mtime fallback, photo selection, content-addressable paths, incremental copy, manifest tests
-- **Manifest** (6 tests) — Open/create, version, insert/contains, remove, list, idempotent insert
+- **Manifest** (9 tests) — Open/create, version, insert/contains, remove, list, idempotent insert, schema structure pinning (tables, columns), data reopen persistence
 - **Export** (21 tests) — build_export_path (all format extensions, collision, skip, no-extension), export_photo_to_heic (skip/convert), convert_to_heic (parent dirs, invalid source, output validation, quality effect), sips availability
 - **Perceptual hash** (17 tests) — Hamming distance, manual aHash/dHash computation, real JPEG/PNG hashing, EXIF orientation (identity, 90 CW, 180, 90 CCW)
 - **Scanner** (11 tests) — Directory walk, format filtering, nested directories (deep nesting, multiple levels, siblings, symlinks)

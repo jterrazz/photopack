@@ -49,6 +49,9 @@ pub enum Error {
 
     #[error("sips command not available — this feature requires macOS")]
     SipsNotAvailable,
+
+    #[error("catalog version {db} is newer than supported version {code} — upgrade photopack")]
+    SchemaTooNew { db: i64, code: i64 },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
