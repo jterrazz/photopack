@@ -1,3 +1,4 @@
+use std::io::BufReader;
 use std::path::Path;
 
 use fast_image_resize::{self as fir, images::Image as FirImage};
@@ -11,6 +12,9 @@ use fast_image_resize::{self as fir, images::Image as FirImage};
 /// - JPEG: `turbojpeg` full-resolution grayscale decode (feature-gated, skips chroma)
 /// - Other formats: `image` crate decode, RGB resize to 9x8, then grayscale conversion
 ///
+/// Both paths apply EXIF orientation before resizing, so photos with rotation tags
+/// (common on iPhone originals) produce the same hash as physically-rotated exports.
+///
 /// Both paths produce a 9x8 grayscale buffer for manual aHash + dHash computation.
 /// Full-resolution decode is critical — DCT scaling changes frequency-domain coefficients
 /// differently for recompressed JPEGs, causing hash divergence beyond threshold.
@@ -23,7 +27,7 @@ pub fn compute_perceptual_hashes(path: &Path) -> Option<(u64, u64)> {
 
 /// Load image and produce a 9x8 grayscale pixel buffer ready for hashing.
 fn load_9x8_grayscale(path: &Path) -> Option<[u8; 72]> {
-    // JPEG: turbojpeg full-res grayscale → resize to 9x8
+    // JPEG: turbojpeg full-res grayscale → orientation → resize to 9x8
     #[cfg(feature = "turbojpeg")]
     if is_jpeg(path) {
         if let Some(buf) = load_jpeg_9x8(path) {
@@ -31,7 +35,7 @@ fn load_9x8_grayscale(path: &Path) -> Option<[u8; 72]> {
         }
     }
 
-    // Other formats: image crate → RGB resize to 9x8 → grayscale
+    // Other formats: image crate → orientation → RGB resize to 9x8 → grayscale
     load_image_crate_9x8(path)
 }
 
@@ -43,10 +47,107 @@ fn is_jpeg(path: &Path) -> bool {
         .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "jpg" | "jpeg"))
 }
 
-/// Decode JPEG at full resolution directly to grayscale using turbojpeg,
-/// then SIMD-resize to 9x8.
+/// Read EXIF orientation tag (1-8). Returns 1 (normal) if missing or unreadable.
+fn read_exif_orientation(path: &Path) -> u8 {
+    let read = || -> Option<u8> {
+        let file = std::fs::File::open(path).ok()?;
+        let mut reader = BufReader::new(file);
+        let exif = exif::Reader::new().read_from_container(&mut reader).ok()?;
+        let field = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?;
+        field.value.get_uint(0).map(|v| v as u8)
+    };
+    read().unwrap_or(1)
+}
+
+/// Apply EXIF orientation to a grayscale buffer, returning the corrected buffer
+/// and new dimensions. Handles all 8 EXIF orientation values.
 ///
-/// Pipeline: turbojpeg GRAY format (full res) → fast_image_resize 9x8
+/// Orientations:
+/// 1: Normal                    5: Mirror + rotate 90° CW
+/// 2: Mirror horizontal         6: Rotate 90° CW
+/// 3: Rotate 180°               7: Mirror + rotate 90° CCW
+/// 4: Mirror vertical           8: Rotate 90° CCW
+fn apply_orientation(buf: &[u8], w: usize, h: usize, orientation: u8) -> (Vec<u8>, usize, usize) {
+    match orientation {
+        1 => (buf.to_vec(), w, h),
+        2 => {
+            // Mirror horizontal
+            let mut out = vec![0u8; w * h];
+            for y in 0..h {
+                for x in 0..w {
+                    out[y * w + x] = buf[y * w + (w - 1 - x)];
+                }
+            }
+            (out, w, h)
+        }
+        3 => {
+            // Rotate 180°
+            let mut out = vec![0u8; w * h];
+            for y in 0..h {
+                for x in 0..w {
+                    out[y * w + x] = buf[(h - 1 - y) * w + (w - 1 - x)];
+                }
+            }
+            (out, w, h)
+        }
+        4 => {
+            // Mirror vertical
+            let mut out = vec![0u8; w * h];
+            for y in 0..h {
+                for x in 0..w {
+                    out[y * w + x] = buf[(h - 1 - y) * w + x];
+                }
+            }
+            (out, w, h)
+        }
+        5 => {
+            // Transpose (mirror + rotate 90° CW)
+            let mut out = vec![0u8; w * h];
+            for y in 0..h {
+                for x in 0..w {
+                    out[x * h + y] = buf[y * w + x];
+                }
+            }
+            (out, h, w)
+        }
+        6 => {
+            // Rotate 90° CW
+            let mut out = vec![0u8; w * h];
+            for y in 0..h {
+                for x in 0..w {
+                    out[x * h + (h - 1 - y)] = buf[y * w + x];
+                }
+            }
+            (out, h, w)
+        }
+        7 => {
+            // Transverse (mirror + rotate 90° CCW)
+            let mut out = vec![0u8; w * h];
+            for y in 0..h {
+                for x in 0..w {
+                    out[(w - 1 - x) * h + (h - 1 - y)] = buf[y * w + x];
+                }
+            }
+            (out, h, w)
+        }
+        8 => {
+            // Rotate 90° CCW
+            let mut out = vec![0u8; w * h];
+            for y in 0..h {
+                for x in 0..w {
+                    out[(w - 1 - x) * h + y] = buf[y * w + x];
+                }
+            }
+            (out, h, w)
+        }
+        _ => (buf.to_vec(), w, h),
+    }
+}
+
+/// Decode JPEG at full resolution directly to grayscale using turbojpeg,
+/// apply EXIF orientation, then SIMD-resize to 9x8.
+///
+/// Pipeline: turbojpeg GRAY format (full res) → EXIF orientation → fast_image_resize 9x8
 /// Skips chroma decode entirely (1 byte/pixel instead of 3).
 /// Full-resolution decode is required — DCT scaling produces different
 /// intermediate pixels for recompressed JPEGs, causing hash divergence.
@@ -69,6 +170,10 @@ fn load_jpeg_9x8(path: &Path) -> Option<[u8; 72]> {
     };
     decompressor.decompress(&jpeg_data, output).ok()?;
 
+    // Apply EXIF orientation before resize
+    let orientation = read_exif_orientation(path);
+    let (buf, w, h) = apply_orientation(&buf, w, h, orientation);
+
     // SIMD resize grayscale to 9x8
     let src = FirImage::from_vec_u8(w as u32, h as u32, buf, fir::PixelType::U8).ok()?;
     let mut dst = FirImage::new(9, 8, fir::PixelType::U8);
@@ -79,16 +184,50 @@ fn load_jpeg_9x8(path: &Path) -> Option<[u8; 72]> {
     Some(pixels)
 }
 
-/// Decode any supported format using the `image` crate, resize RGB to 9x8,
-/// then convert only those 72 pixels to grayscale.
+/// Apply EXIF orientation to an RGB buffer, returning corrected buffer and new dimensions.
+fn apply_orientation_rgb(buf: &[u8], w: usize, h: usize, orientation: u8) -> (Vec<u8>, usize, usize) {
+    if orientation == 1 {
+        return (buf.to_vec(), w, h);
+    }
+
+    let pixel_count = w * h;
+    let mut out = vec![0u8; pixel_count * 3];
+    let (new_w, new_h) = if orientation >= 5 { (h, w) } else { (w, h) };
+
+    for y in 0..h {
+        for x in 0..w {
+            let src_idx = (y * w + x) * 3;
+            let (dx, dy) = match orientation {
+                2 => (w - 1 - x, y),
+                3 => (w - 1 - x, h - 1 - y),
+                4 => (x, h - 1 - y),
+                5 => (y, x),
+                6 => (h - 1 - y, x),
+                7 => (h - 1 - y, w - 1 - x),
+                8 => (y, w - 1 - x),
+                _ => (x, y),
+            };
+            let dst_idx = (dy * new_w + dx) * 3;
+            out[dst_idx..dst_idx + 3].copy_from_slice(&buf[src_idx..src_idx + 3]);
+        }
+    }
+    (out, new_w, new_h)
+}
+
+/// Decode any supported format using the `image` crate, apply EXIF orientation,
+/// resize RGB to 9x8, then convert only those 72 pixels to grayscale.
 /// Avoids full-resolution grayscale conversion (e.g., 12MP × BT.601 per pixel).
 fn load_image_crate_9x8(path: &Path) -> Option<[u8; 72]> {
     let img = image::open(path).ok()?;
     let rgb = img.to_rgb8();
-    let (w, h) = (rgb.width(), rgb.height());
+    let (w, h) = (rgb.width() as usize, rgb.height() as usize);
+
+    // Apply EXIF orientation before resize
+    let orientation = read_exif_orientation(path);
+    let (rgb_data, w, h) = apply_orientation_rgb(rgb.as_raw(), w, h, orientation);
 
     // SIMD resize RGB to 9x8 (216 bytes output instead of millions)
-    let src = FirImage::from_vec_u8(w, h, rgb.into_raw(), fir::PixelType::U8x3).ok()?;
+    let src = FirImage::from_vec_u8(w as u32, h as u32, rgb_data, fir::PixelType::U8x3).ok()?;
     let mut dst = FirImage::new(9, 8, fir::PixelType::U8x3);
     fir::Resizer::new().resize(&src, &mut dst, None).ok()?;
 
@@ -262,5 +401,51 @@ mod tests {
 
         let result = compute_perceptual_hashes(&path);
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_apply_orientation_identity() {
+        let buf: Vec<u8> = (0..12).collect(); // 4x3
+        let (out, w, h) = apply_orientation(&buf, 4, 3, 1);
+        assert_eq!((w, h), (4, 3));
+        assert_eq!(out, buf);
+    }
+
+    #[test]
+    fn test_apply_orientation_rotate_90_cw() {
+        // 3x2 grid:
+        // [1, 2, 3]
+        // [4, 5, 6]
+        let buf = vec![1, 2, 3, 4, 5, 6];
+        let (out, w, h) = apply_orientation(&buf, 3, 2, 6);
+        // Rotated 90° CW → 2x3:
+        // [4, 1]
+        // [5, 2]
+        // [6, 3]
+        assert_eq!((w, h), (2, 3));
+        assert_eq!(out, vec![4, 1, 5, 2, 6, 3]);
+    }
+
+    #[test]
+    fn test_apply_orientation_rotate_180() {
+        let buf = vec![1, 2, 3, 4, 5, 6];
+        let (out, w, h) = apply_orientation(&buf, 3, 2, 3);
+        // Rotated 180° → 3x2:
+        // [6, 5, 4]
+        // [3, 2, 1]
+        assert_eq!((w, h), (3, 2));
+        assert_eq!(out, vec![6, 5, 4, 3, 2, 1]);
+    }
+
+    #[test]
+    fn test_apply_orientation_rotate_90_ccw() {
+        let buf = vec![1, 2, 3, 4, 5, 6];
+        let (out, w, h) = apply_orientation(&buf, 3, 2, 8);
+        // Rotated 90° CCW → 2x3:
+        // [3, 6]
+        // [2, 5]
+        // [1, 4]
+        assert_eq!((w, h), (2, 3));
+        assert_eq!(out, vec![3, 6, 2, 5, 1, 4]);
     }
 }
