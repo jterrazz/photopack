@@ -28,7 +28,7 @@ photopack scan
 
 # See what it found
 photopack status
-photopack dupes
+photopack ls
 
 # Pack into a permanent lossless archive (best-quality originals, date-organized)
 photopack pack ~/PhotoArchive
@@ -45,9 +45,9 @@ photopack export ~/PhotosPacked --quality 85
 | `photopack rm <path>` | Unregister a source and remove its photos from the catalog |
 | `photopack scan` | Scan all sources, hash files, and find duplicates |
 | `photopack status` | Show catalog dashboard (overview, sources, vault) |
-| `photopack status --files` | Show full files table with roles and vault eligibility |
-| `photopack dupes` | List all duplicate groups |
-| `photopack dupes <id>` | Show group detail with source-of-truth marker |
+| `photopack ls` | Show full files table with roles and vault eligibility |
+| `photopack ls --dupes` | List all duplicate groups |
+| `photopack ls --dupes <id>` | Show group detail with source-of-truth marker |
 | `photopack pack <path>` | Set vault path and sync best-quality originals (lossless) |
 | `photopack pack` | Re-sync using saved vault path |
 | `photopack export <path> [--quality 85]` | Convert deduplicated photos to compressed HEIC (macOS) |
@@ -119,7 +119,7 @@ If 4 copies of the same photo exist, only 1 image is decoded instead of 4. Re-sc
 
 - **Overview** — Photo count, unique count, duplicate groups, disk usage, estimated savings, source count, vault path
 - **Sources table** — Per-source photo count, total size, and last scanned timestamp
-- **Files table** (`status --files`) — Every file with its source name, format, size, group ID, role (Best Copy / Duplicate / Unique), and vault eligibility (checkmark)
+- **Files table** (`ls`) — Every file with its source name, format, size, group ID, role (Best Copy / Duplicate / Unique), and vault eligibility (checkmark)
 
 Files are sorted by group (source-of-truth first within each group), then ungrouped files by path. Blank separator rows visually separate groups.
 
@@ -190,7 +190,7 @@ photopack/
 │           └── commands/       # Subcommand handlers
 │               ├── sources.rs  # Add, rm, scan sources (progress bar via indicatif)
 │               ├── status.rs   # Catalog dashboard with tables (comfy-table)
-│               ├── duplicates.rs # List/detail duplicate groups
+│               ├── ls.rs       # List files or duplicate groups
 │               ├── pack.rs     # Lossless vault archive
 │               └── export.rs   # Compressed HEIC export
 └── tests/

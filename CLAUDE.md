@@ -39,7 +39,7 @@ cargo clippy --workspace
 - **Two-phase hashing**: Scan computes SHA-256 + EXIF first (fast, I/O-bound), then perceptual hashes only for unique SHA-256 content. Exact duplicates skip image decoding entirely; existing catalog hashes are reused. Batch mtime check replaces per-file queries.
 - **Incremental scan**: Files are skipped if their mtime hasn't changed. Files deleted from disk are removed from the catalog (`remove_photos_by_paths`). Groups are rebuilt from scratch each scan.
 - **HEIC export via sips**: Uses macOS `sips` command for HEIC conversion (zero dependencies). Invoked via `photopack export`, independent from lossless vault sync. Reads from catalog (source directories), not the vault. Skip by file existence (not size, since conversion changes size). `#[cfg(target_os = "macos")]` gates for e2e tests.
-- **Flat CLI structure**: All commands are top-level (`add`, `rm`, `scan`, `status`, `dupes`, `pack`, `export`). `pack` = permanent lossless archive (best-quality originals, persists across source removal, path persisted in catalog). `export` = compressed HEIC output for space savings (path required each invocation).
+- **Flat CLI structure**: All commands are top-level (`add`, `rm`, `scan`, `status`, `ls`, `pack`, `export`). `ls` = file listing (default) or duplicate groups (`--dupes`). `pack` = permanent lossless archive (best-quality originals, persists across source removal, path persisted in catalog). `export` = compressed HEIC output for space savings (path required each invocation).
 
 ## Testing
 

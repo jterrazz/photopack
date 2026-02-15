@@ -6,35 +6,35 @@ use photopack_core::domain::{DuplicateGroup, PhotoFile, Source};
 use photopack_core::Vault;
 
 /// Precomputed lookup data for rendering the status dashboard.
-struct StatusData {
+pub(crate) struct StatusData {
     /// photo_id → group_id
-    photo_group: HashMap<i64, i64>,
+    pub(crate) photo_group: HashMap<i64, i64>,
     /// photo_id → true if source-of-truth
-    photo_is_sot: HashMap<i64, bool>,
+    pub(crate) photo_is_sot: HashMap<i64, bool>,
     /// Set of all photo IDs that belong to a group
-    grouped_ids: HashSet<i64>,
+    pub(crate) grouped_ids: HashSet<i64>,
 }
 
 /// Aggregated statistics derived from photos and groups.
 #[derive(Debug, PartialEq)]
-struct Aggregates {
-    total_photos: usize,
-    total_groups: usize,
-    total_duplicates: usize,
-    total_unique: usize,
-    total_disk: u64,
-    savings: u64,
+pub(crate) struct Aggregates {
+    pub(crate) total_photos: usize,
+    pub(crate) total_groups: usize,
+    pub(crate) total_duplicates: usize,
+    pub(crate) total_unique: usize,
+    pub(crate) total_disk: u64,
+    pub(crate) savings: u64,
 }
 
 /// Per-source statistics.
 #[derive(Debug, PartialEq)]
-struct SourceStats {
-    photo_count: usize,
-    total_size: u64,
+pub(crate) struct SourceStats {
+    pub(crate) photo_count: usize,
+    pub(crate) total_size: u64,
 }
 
 impl StatusData {
-    fn build(groups: &[DuplicateGroup]) -> Self {
+    pub(crate) fn build(groups: &[DuplicateGroup]) -> Self {
         let mut photo_group: HashMap<i64, i64> = HashMap::new();
         let mut photo_is_sot: HashMap<i64, bool> = HashMap::new();
         let mut grouped_ids: HashSet<i64> = HashSet::new();
@@ -54,12 +54,12 @@ impl StatusData {
         }
     }
 
-    fn is_duplicate(&self, photo_id: i64) -> bool {
+    pub(crate) fn is_duplicate(&self, photo_id: i64) -> bool {
         self.grouped_ids.contains(&photo_id)
             && !self.photo_is_sot.get(&photo_id).copied().unwrap_or(false)
     }
 
-    fn vault_eligible(&self, photo_id: i64) -> bool {
+    pub(crate) fn vault_eligible(&self, photo_id: i64) -> bool {
         if self.grouped_ids.contains(&photo_id) {
             self.photo_is_sot.get(&photo_id).copied().unwrap_or(false)
         } else {
@@ -68,7 +68,7 @@ impl StatusData {
     }
 }
 
-fn compute_aggregates(photos: &[PhotoFile], groups: &[DuplicateGroup], data: &StatusData) -> Aggregates {
+pub(crate) fn compute_aggregates(photos: &[PhotoFile], groups: &[DuplicateGroup], data: &StatusData) -> Aggregates {
     let total_photos = photos.len();
     let total_groups = groups.len();
     let total_duplicates = photos.iter().filter(|p| data.is_duplicate(p.id)).count();
@@ -90,7 +90,7 @@ fn compute_aggregates(photos: &[PhotoFile], groups: &[DuplicateGroup], data: &St
     }
 }
 
-fn compute_source_stats(photos: &[PhotoFile]) -> HashMap<i64, SourceStats> {
+pub(crate) fn compute_source_stats(photos: &[PhotoFile]) -> HashMap<i64, SourceStats> {
     let mut stats: HashMap<i64, SourceStats> = HashMap::new();
     for photo in photos {
         let entry = stats.entry(photo.source_id).or_insert(SourceStats {
@@ -103,7 +103,7 @@ fn compute_source_stats(photos: &[PhotoFile]) -> HashMap<i64, SourceStats> {
     stats
 }
 
-pub fn run(vault: &Vault, show_files: bool) -> Result<()> {
+pub fn run(vault: &Vault) -> Result<()> {
     let sources = vault.sources()?;
     let photos = vault.photos()?;
     let groups = vault.groups()?;
@@ -182,88 +182,15 @@ pub fn run(vault: &Vault, show_files: bool) -> Result<()> {
     println!("  -------");
     println!("{sources_table}");
 
-    // Files table
-    if !show_files {
-        println!();
-        println!("  Run with --files to show the full files table.");
-        println!();
-        return Ok(());
-    }
-
-    let source_name_map: HashMap<i64, String> = sources
-        .iter()
-        .map(|s| (s.id, source_display_name(s)))
-        .collect();
-
-    let mut files_table = Table::new();
-    files_table.load_preset(UTF8_FULL);
-    files_table.set_content_arrangement(ContentArrangement::Dynamic);
-    files_table.set_header(vec![
-        Cell::new("File"),
-        Cell::new("Source"),
-        Cell::new("Fmt"),
-        Cell::new("Size"),
-        Cell::new("Group"),
-        Cell::new("Role"),
-        Cell::new("Vault"),
-    ]);
-
-    let header_len = 7; // File, Source, Fmt, Size, Group, Role, Vault
-
-    // Partition and sort
-    let (grouped_photos, ungrouped_photos) = sort_photos_for_display(&photos, &data);
-
-    // Add grouped photo rows
-    let mut last_group_id: Option<i64> = None;
-
-    for photo in &grouped_photos {
-        let gid = *data.photo_group.get(&photo.id).unwrap();
-
-        if last_group_id.is_some() && last_group_id != Some(gid) {
-            let empty_row: Vec<Cell> = (0..header_len).map(|_| Cell::new("")).collect();
-            files_table.add_row(empty_row);
-        }
-        last_group_id = Some(gid);
-
-        add_photo_row(
-            &mut files_table,
-            photo,
-            &source_name_map,
-            &data,
-        );
-    }
-
-    // Separator between grouped and ungrouped
-    if !grouped_photos.is_empty() && !ungrouped_photos.is_empty() {
-        let empty_row: Vec<Cell> = (0..header_len).map(|_| Cell::new("")).collect();
-        files_table.add_row(empty_row);
-    }
-
-    for photo in &ungrouped_photos {
-        add_photo_row(
-            &mut files_table,
-            photo,
-            &source_name_map,
-            &data,
-        );
-    }
-
     println!();
-    println!("  Files");
-    println!("  -----");
-    println!("{files_table}");
-    println!();
-    println!(
-        "  {} files ({} groups, {} duplicates)",
-        agg.total_photos, agg.total_groups, agg.total_duplicates
-    );
+    println!("  Run 'photopack ls' to show the full files table.");
     println!();
 
     Ok(())
 }
 
 /// Sort photos for display: grouped first (by group ID, SOT first), then ungrouped (by path).
-fn sort_photos_for_display<'a>(
+pub(crate) fn sort_photos_for_display<'a>(
     photos: &'a [PhotoFile],
     data: &StatusData,
 ) -> (Vec<&'a PhotoFile>, Vec<&'a PhotoFile>) {
@@ -295,7 +222,7 @@ fn sort_photos_for_display<'a>(
     (grouped, ungrouped)
 }
 
-fn add_photo_row(
+pub(crate) fn add_photo_row(
     table: &mut Table,
     photo: &PhotoFile,
     source_name_map: &HashMap<i64, String>,
@@ -348,7 +275,7 @@ fn add_photo_row(
     table.add_row(row);
 }
 
-fn source_display_name(source: &Source) -> String {
+pub(crate) fn source_display_name(source: &Source) -> String {
     source
         .path
         .file_name()
@@ -356,7 +283,7 @@ fn source_display_name(source: &Source) -> String {
         .unwrap_or_else(|| source.path.display().to_string())
 }
 
-fn format_size(bytes: u64) -> String {
+pub(crate) fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
     const GB: u64 = MB * 1024;

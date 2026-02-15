@@ -33,14 +33,13 @@ enum Commands {
     /// Scan all sources for photos and find duplicates
     Scan,
     /// Show catalog dashboard (overview, sources, vault info)
-    Status {
-        /// Show file table with roles and vault eligibility
+    Status,
+    /// List files, or duplicate groups with --dupes
+    Ls {
+        /// Show duplicate groups instead of files
         #[arg(long)]
-        files: bool,
-    },
-    /// List duplicate groups, or show details of a specific group
-    Dupes {
-        /// Group ID (omit to list all)
+        dupes: bool,
+        /// Group ID (with --dupes)
         id: Option<i64>,
     },
     /// Pack best-quality originals into a permanent lossless archive
@@ -78,8 +77,8 @@ fn main() -> Result<()> {
         Commands::Add { path } => commands::sources::add(&vault, path)?,
         Commands::Rm { path } => commands::sources::rm(&vault, path)?,
         Commands::Scan => commands::sources::scan(&mut vault)?,
-        Commands::Status { files } => commands::status::run(&vault, files)?,
-        Commands::Dupes { id } => commands::duplicates::run(&vault, id)?,
+        Commands::Status => commands::status::run(&vault)?,
+        Commands::Ls { dupes, id } => commands::ls::run(&vault, dupes, id)?,
         Commands::Pack { path } => commands::pack::run(&mut vault, path)?,
         Commands::Export { path, quality } => commands::export::run(&mut vault, &path, quality)?,
     }
