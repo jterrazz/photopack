@@ -26,7 +26,7 @@ cargo clippy --workspace
 ## Key Design Decisions
 
 - **Perceptual hashing gate**: Only JPEG, PNG, TIFF, WebP support perceptual hashing (`PhotoFormat::supports_perceptual_hash()`). HEIC and RAW formats skip it to avoid decoder hangs. These formats are still indexed by SHA-256 and EXIF.
-- **Perceptual hash pipeline**: JPEG path: `turbojpeg` full-resolution GRAY format (skips chroma, 1 byte/pixel) → SIMD resize to 9x8. Non-JPEG path: `image` crate → RGB resize to 9x8 → manual BT.601 on 72 pixels. Both produce a 9x8 grayscale buffer for manual aHash + dHash. No `img_hash` dependency. `turbojpeg` is feature-gated (default on, disable with `--no-default-features` for WASM). Full-resolution decode is critical — DCT scaling changes frequency-domain coefficients differently for recompressed JPEGs, causing hash divergence beyond threshold.
+- **Perceptual hash pipeline**: JPEG path: `turbojpeg` full-resolution GRAY format (skips chroma, 1 byte/pixel) → EXIF orientation → SIMD resize to 9x8. Non-JPEG path: `image` crate → EXIF orientation → RGB resize to 9x8 → manual BT.601 on 72 pixels. Both produce a 9x8 grayscale buffer for manual aHash + dHash. No `img_hash` dependency. `turbojpeg` is feature-gated (default on, disable with `--no-default-features` for WASM). EXIF orientation is applied before resize (iPhone originals store landscape pixels with rotation tag; exports physically rotate). Full-resolution decode is critical — DCT scaling causes hash divergence. Phash version tracking (`PHASH_VERSION` constant) auto-invalidates cached hashes when the algorithm changes.
 - **Dual-hash consensus**: Matching requires both aHash (stored as `phash`) and dHash to be within threshold. When one hash is missing (cross-format), phash-only match requires stricter HIGH threshold. This dramatically reduces false positives.
 - **Perceptual hash thresholds**: NearCertain ≤2, High ≤2, Probable ≤3 bits (out of 64). Super-safe: true cross-format duplicates have distance 0-2, different photos have distance 3+.
 - **Phase 3 cross-format matching**: Ungrouped photos are compared against ALL photos (including already-grouped ones) via BK-tree. This enables cross-format duplicate detection when one variant is already in a SHA-256 group.
@@ -40,7 +40,7 @@ cargo clippy --workspace
 
 ## Testing
 
-- 295 tests total (28 CLI + 143 core + 124 e2e)
+- 299 tests total (28 CLI + 147 core + 124 e2e)
 - E2E tests in `crates/core/tests/vault_e2e.rs` use real JPEG/PNG generation via the `image` crate
 - Cross-format testing: use `create_file_with_jpeg_bytes()` to write JPEG bytes to `.cr2`/`.heic`/`.dng` etc. — scanner assigns format from extension, hashes work on raw bytes
 - Use structurally different patterns (gradient vs checkerboard vs stripes) in tests to ensure distinct perceptual hashes — color-only differences are not enough
