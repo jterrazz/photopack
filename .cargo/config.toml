@@ -1,0 +1,6 @@
+# Cargo's output is an artefact, so it lands under .artifacts/ like every other
+# tool's instead of in target/ at the workspace root. The macOS app links the
+# release staticlib out of .artifacts/cargo/release (see photopack-macos'
+# project.yml).
+[build]
+target-dir = ".artifacts/cargo"
