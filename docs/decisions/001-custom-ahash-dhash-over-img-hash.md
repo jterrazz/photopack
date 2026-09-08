@@ -53,5 +53,5 @@ hybrid decode pipeline:
 - Commit `ade7366` (2026-02-15) — "Replace img_hash with
   turbojpeg + fast_image_resize"; `eb219e3` (2026-02-15) — "Apply EXIF
   orientation before perceptual hashing"
-- The rejected-alternatives row in [crates](../08-crates.md); the pipeline
+- The rejected-alternatives row in [crates](../01-architecture.md#rejected-alternatives); the pipeline
   itself in `crates/core/src/hasher/perceptual.rs`

@@ -65,6 +65,7 @@ build.
 ```bash
 cargo test --workspace        # everything
 cargo test -p photopack-core  # core unit and e2e
-cargo clippy --workspace      # lint
-cargo fmt --all               # format
 ```
+
+The lint and format gates are not testing — they are
+[02 — Developing](02-developing.md)'s.
