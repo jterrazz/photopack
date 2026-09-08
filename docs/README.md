@@ -9,6 +9,7 @@ positioned — is not here.
 | Chapter                                        | Holds                                                                     |
 | ----------------------------------------------- | -------------------------------------------------------------------------- |
 | [01 — Architecture](01-architecture.md)        | The two crates, the dependency stack, the source layout, the standing rules |
+| [02 — Developing](02-developing.md)            | The toolchain, the gates, which crate a change belongs in, what it owes  |
 | [03 — Testing](03-testing.md)                  | Where tests live, what they pin, how e2e fixtures are made               |
 | [05 — Catalog](05-catalog.md)                  | The SQLite catalog: schema, indexes, migrations, batching                |
 | [06 — Deduplication](06-deduplication.md)      | The three signals, the confidence levels, the five-phase pipeline        |
