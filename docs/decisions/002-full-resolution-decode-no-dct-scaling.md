@@ -40,7 +40,7 @@ mtimes so skipped files re-enter hashing.
 
 - Correct matching of recompressed JPEGs — the core promise holds.
 - The revert discipline produced the version-tracking machinery
-  ([deduplication — phash version tracking](../03-deduplication.md#phash-version-tracking)).
+  ([deduplication — phash version tracking](../06-deduplication.md#phash-version-tracking)).
 
 ### Harder
 

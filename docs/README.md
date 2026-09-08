@@ -6,17 +6,20 @@ positioned — is not here.
 
 ## Chapters
 
-| Chapter                                        | Holds                                                                    |
-| ---------------------------------------------- | ------------------------------------------------------------------------ |
-| [01 — Architecture](01-architecture.md)        | The two crates, the source layout, the data flow, the standing rules     |
-| [02 — Catalog](02-catalog.md)                  | The SQLite catalog: schema, indexes, migrations, batching                |
-| [03 — Deduplication](03-deduplication.md)      | The three signals, the confidence levels, the five-phase pipeline        |
-| [04 — Source of truth](04-source-of-truth.md)  | How a duplicate group elects its best version                            |
-| [05 — Formats](05-formats.md)                  | What can be scanned, which formats get a perceptual hash                 |
-| [06 — Pack and export](06-pack-and-export.md)  | The lossless archive, and the compressed HEIC library                    |
-| [07 — CLI](07-cli.md)                          | The command families and the invariants `--help` does not state          |
-| [08 — Crates](08-crates.md)                    | The dependency stack, the hardware acceleration, the rejected candidates |
-| [09 — Testing](09-testing.md)                  | Where tests live, what they pin, how e2e fixtures are made               |
+| Chapter                                        | Holds                                                                     |
+| ----------------------------------------------- | -------------------------------------------------------------------------- |
+| [01 — Architecture](01-architecture.md)        | The two crates, the dependency stack, the source layout, the standing rules |
+| [03 — Testing](03-testing.md)                  | Where tests live, what they pin, how e2e fixtures are made               |
+| [05 — Catalog](05-catalog.md)                  | The SQLite catalog: schema, indexes, migrations, batching                |
+| [06 — Deduplication](06-deduplication.md)      | The three signals, the confidence levels, the five-phase pipeline        |
+| [07 — Source of truth](07-source-of-truth.md)  | How a duplicate group elects its best version                            |
+| [08 — Formats](08-formats.md)                  | What can be scanned, which formats get a perceptual hash                 |
+| [09 — Pack and export](09-pack-and-export.md)  | The lossless archive, and the compressed HEIC library                    |
+| [10 — CLI](10-cli.md)                          | The command families and the invariants `--help` does not state          |
+
+There is no `04-operating.md`: photopack ships nothing that runs — no image,
+no publishable package, no provisioned platform — it is `cargo install`ed
+from source.
 
 Decisions are in [decisions/](decisions/), numbered and chronological.
 

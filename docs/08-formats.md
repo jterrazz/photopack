@@ -16,7 +16,7 @@ are still fully indexed by SHA-256 and EXIF, and phases 2 and 5 of the
 matching pipeline exist so they still land in the right group.
 
 The decode pipeline behind the supported formats, and why it is hand-rolled,
-are [03 — Deduplication](03-deduplication.md)'s.
+are [06 — Deduplication](06-deduplication.md)'s.
 
 ## Export
 
@@ -33,4 +33,4 @@ network storage are designed and not started.
 ## Quality tiers
 
 Which of these formats wins when a group elects its best version is
-[04 — Source of truth](04-source-of-truth.md)'s, and lives nowhere else.
+[07 — Source of truth](07-source-of-truth.md)'s, and lives nowhere else.

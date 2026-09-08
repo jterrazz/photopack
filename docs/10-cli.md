@@ -23,7 +23,7 @@ Every command accepts `--catalog <path>`; without it the catalog is
   source of truth. A file on disk is never modified or deleted.
 - `add` registers, `scan` indexes. Adding a source does not scan it. `scan`
   walks every registered source, hashes, runs the
-  [five-phase pipeline](03-deduplication.md), elects a source of truth per
+  [five-phase pipeline](06-deduplication.md), elects a source of truth per
   group, and shows an `indicatif` progress bar.
 - Scan is incremental and self-healing. Only files whose mtime changed are
   processed, files that disappeared from disk are removed from the catalog,
@@ -33,7 +33,7 @@ Every command accepts `--catalog <path>`; without it the catalog is
   the source of truth first and blank rows between groups. `--dupes` lists
   the groups, `--dupes <id>` details one and marks its elected version.
 - `pack` is the permanent archive, `export` is disposable output, and their
-  asymmetry is deliberate — [06 — Pack and export](06-pack-and-export.md)
+  asymmetry is deliberate — [09 — Pack and export](09-pack-and-export.md)
   carries both.
 
 ## Dashboard
